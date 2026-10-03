@@ -5,7 +5,7 @@ const OS = {
     name: "macOS",
     need: "Xcode command line tools (a C compiler). If you don't have them: <code>xcode-select --install</code>.",
     steps: [
-      ["Get the code", "git clone <your-faxal-repository> faxal\ncd faxal"],
+      ["Get the code", "git clone https://github.com/arkdyl/faxal faxal\ncd faxal"],
       ["Build and install", "./install.sh"],
       ["Check it works", "faxal --version\nfaxal -e 'print(\"hello from faxal\")'"],
     ],
@@ -17,7 +17,7 @@ const OS = {
     name: "Linux",
     need: "A C compiler: <code>sudo apt install build-essential</code> (Debian, Ubuntu), <code>sudo dnf install gcc</code> (Fedora) or <code>sudo pacman -S gcc</code> (Arch).",
     steps: [
-      ["Get the code", "git clone <your-faxal-repository> faxal\ncd faxal"],
+      ["Get the code", "git clone https://github.com/arkdyl/faxal faxal\ncd faxal"],
       ["Build and install", "./install.sh"],
       ["Check it works", "faxal --version\nfaxal -e 'print(\"hello from faxal\")'"],
     ],
@@ -29,7 +29,7 @@ const OS = {
     name: "Windows",
     need: "A C compiler: MinGW-w64 gcc or clang. For example: <code>winget install BrechtSanders.WinLibs.POSIX.UCRT</code>.",
     steps: [
-      ["Get the code", "git clone <your-faxal-repository> faxal\ncd faxal"],
+      ["Get the code", "git clone https://github.com/arkdyl/faxal faxal\ncd faxal"],
       ["Build and install (PowerShell)", ".\\install.ps1"],
       ["Check it works (in a new terminal)", "faxal --version\nfaxal -e 'print(\"hello from faxal\")'"],
     ],

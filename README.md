@@ -59,6 +59,7 @@ The language guide is in [docs/LANGUAGE.md](docs/LANGUAGE.md) and on the website
 ## Install
 
 ```bash
+git clone https://github.com/arkdyl/faxal && cd faxal
 ./install.sh        # Linux, macOS, BSD
 .\install.ps1       # Windows (PowerShell)
 ```
