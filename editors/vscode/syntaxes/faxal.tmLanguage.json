@@ -1,0 +1,117 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Faxal",
+  "scopeName": "source.faxal",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#fstring" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#class-definition" },
+    { "include": "#function-definition" },
+    { "include": "#keyword" },
+    { "include": "#constant" },
+    { "include": "#builtin" },
+    { "include": "#operator" },
+    { "include": "#function-call" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.number-sign.faxal",
+      "match": "#.*$"
+    },
+    "escape": {
+      "name": "constant.character.escape.faxal",
+      "match": "\\\\."
+    },
+    "string": {
+      "patterns": [
+        { "name": "string.quoted.double.faxal", "begin": "\"", "end": "\"", "patterns": [{ "include": "#escape" }] },
+        { "name": "string.quoted.single.faxal", "begin": "'", "end": "'", "patterns": [{ "include": "#escape" }] }
+      ]
+    },
+    "fstring": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.faxal",
+          "begin": "\\bf\"",
+          "end": "\"",
+          "patterns": [{ "include": "#escape" }, { "include": "#interpolation" }]
+        },
+        {
+          "name": "string.quoted.single.faxal",
+          "begin": "\\bf'",
+          "end": "'",
+          "patterns": [{ "include": "#escape" }, { "include": "#interpolation" }]
+        }
+      ]
+    },
+    "interpolation": {
+      "name": "meta.interpolation.faxal",
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.faxal" } },
+      "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.faxal" } },
+      "patterns": [
+        { "include": "#number" },
+        { "include": "#keyword" },
+        { "include": "#constant" },
+        { "include": "#builtin" },
+        { "include": "#operator" },
+        { "include": "#function-call" }
+      ]
+    },
+    "number": {
+      "name": "constant.numeric.faxal",
+      "match": "\\b(0[xX][0-9a-fA-F_]+|[0-9][0-9_]*(\\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?)\\b"
+    },
+    "class-definition": {
+      "match": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s+(extends)\\s+([A-Za-z_][A-Za-z0-9_]*))?",
+      "captures": {
+        "1": { "name": "storage.type.class.faxal" },
+        "2": { "name": "entity.name.type.class.faxal" },
+        "3": { "name": "storage.modifier.extends.faxal" },
+        "4": { "name": "entity.other.inherited-class.faxal" }
+      }
+    },
+    "function-definition": {
+      "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.function.faxal" },
+        "2": { "name": "entity.name.function.faxal" }
+      }
+    },
+    "keyword": {
+      "patterns": [
+        { "name": "keyword.control.faxal", "match": "\\b(if|else|while|for|in|break|continue|return|try|catch|throw|import|by)\\b" },
+        { "name": "storage.type.faxal", "match": "\\b(let|fn|class)\\b" },
+        { "name": "storage.modifier.faxal", "match": "\\b(extends)\\b" },
+        { "name": "keyword.operator.word.faxal", "match": "\\b(and|or|not)\\b" }
+      ]
+    },
+    "constant": {
+      "patterns": [
+        { "name": "constant.language.faxal", "match": "\\b(true|false|nil)\\b" },
+        { "name": "variable.language.faxal", "match": "\\b(self|super)\\b" }
+      ]
+    },
+    "builtin": {
+      "name": "support.function.builtin.faxal",
+      "match": "\\b(print|write|input|len|str|repr|num|int|type|range|assert|load|isinstance|ord|chr|abs|floor|ceil|round|sqrt|min|max|exit|forward|back|turn|penup|pendown|goto|home|width|color|background|circle|disc|rect|box|text|save_svg)(?=\\s*\\()"
+    },
+    "operator": {
+      "patterns": [
+        { "name": "keyword.operator.pipe.faxal", "match": "\\|>" },
+        { "name": "keyword.operator.coalesce.faxal", "match": "\\?\\?|\\?\\." },
+        { "name": "keyword.operator.range.faxal", "match": "\\.\\." },
+        { "name": "keyword.operator.arithmetic.faxal", "match": "\\*\\*|[-+*/%]=?" },
+        { "name": "keyword.operator.comparison.faxal", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.assignment.faxal", "match": "=" }
+      ]
+    },
+    "function-call": {
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+      "captures": { "1": { "name": "entity.name.function.call.faxal" } }
+    }
+  }
+}

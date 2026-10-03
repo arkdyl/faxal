@@ -1,0 +1,7 @@
+node_modules
+dist
+data
+native/bin
+*.svg.tmp
+*.fxc
+!native/tests/fxc/*.fxc

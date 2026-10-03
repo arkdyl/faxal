@@ -1,0 +1,26 @@
+{
+  "name": "faxal",
+  "displayName": "Faxal",
+  "description": "Syntax highlighting for the Faxal programming language",
+  "version": "1.0.0",
+  "publisher": "faxal",
+  "engines": { "vscode": "^1.60.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "faxal",
+        "aliases": ["Faxal", "faxal"],
+        "extensions": [".fx"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "faxal",
+        "scopeName": "source.faxal",
+        "path": "./syntaxes/faxal.tmLanguage.json"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+# title: Shapes
+# circle and rect draw outlines, disc and box are filled, text writes words
+background("#101018")
+color("#7c9cff")
+width(2)
+circle(60)
+color("#ff7a8a")
+goto(0, -110)
+rect(160, 36)
+color("white")
+text("Faxal", 20)
+color("#ffd166")
+goto(110, 40)
+disc(14)
+color("#06d6a0")
+goto(-110, 40)
+box(24, 24)
