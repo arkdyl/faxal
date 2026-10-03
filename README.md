@@ -159,3 +159,7 @@ make -C native embed        # recompile lib/ into src/embedded.c after editing i
 - running the VM in the browser via WebAssembly, so the site works without a server
 - cross-compiling `faxal build` for other operating systems (today it builds for the computer it runs on)
 - accounts, likes and comments in the gallery
+
+## License
+
+MIT, copyright (c) 2026 Arkadiusz Dylewski. See [LICENSE](LICENSE).
