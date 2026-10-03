@@ -85,8 +85,9 @@ The repository also has a VS Code grammar for syntax highlighting in `editors/vs
 ## Installing
 
 ```bash
-./install.sh         # Linux, macOS, BSD: builds faxal from one C file and installs it
-.\install.ps1        # Windows (PowerShell, needs MinGW-w64 gcc or clang)
+curl -fsSL https://raw.githubusercontent.com/arkdyl/faxal/main/install.sh | sh   # Linux, macOS: downloads the latest release
+irm https://raw.githubusercontent.com/arkdyl/faxal/main/install.ps1 | iex        # Windows (PowerShell)
+./install.sh                                                                     # from a checkout: builds from one C file (needs a C compiler)
 ```
 
-By hand, with nothing but a C compiler: `cc -O2 -o faxal native/dist/faxal.c -lm`. Make, Python and Node are not needed to build or use the language (Node only runs this website). The installers put `faxal` in `/usr/local/bin` (or `~/.faxal/bin`, or `%LOCALAPPDATA%\faxal\bin` on Windows) and print how to add it to your PATH. Faxal is developed on macOS; the Linux and Windows ports are written and have continuous-integration builds, but have had less use.
+By hand, with nothing but a C compiler: `cc -O2 -o faxal native/dist/faxal.c -lm`. Make, Python and Node are not needed to build or use the language (Node only runs this website). The installers put `faxal` in `/usr/local/bin` (or `~/.faxal/bin`, or `%LOCALAPPDATA%\faxal\bin` on Windows) and print how to add it to your PATH. Faxal is developed on macOS. Linux and Windows are built and tested by continuous integration on every change, but have had less everyday use.

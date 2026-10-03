@@ -59,12 +59,16 @@ The language guide is in [docs/LANGUAGE.md](docs/LANGUAGE.md) and on the website
 ## Install
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/arkdyl/faxal/main/install.sh | sh     # Linux, macOS: downloads the latest release
+# Windows (PowerShell): irm https://raw.githubusercontent.com/arkdyl/faxal/main/install.ps1 | iex
+#
+# or from a checkout:
 git clone https://github.com/arkdyl/faxal && cd faxal
 ./install.sh        # Linux, macOS, BSD
 .\install.ps1       # Windows (PowerShell)
 ```
 
-Both build faxal from `native/dist/faxal.c`, the whole runtime as a single C file, so the only thing you need is a C compiler. Or do it by hand: `cc -O2 -o faxal native/dist/faxal.c -lm`. No Make, Python or Node is needed to build or use the language. CI builds and tests it on Linux, macOS and Windows (`.github/workflows/`).
+The one-line installers download the program for your system from the latest [release](https://github.com/arkdyl/faxal/releases) (Linux x86_64 and ARM64, macOS Apple Silicon and Intel, Windows). Run from a checkout, they build faxal from `native/dist/faxal.c`, the whole runtime as a single C file, so the only thing you need is a C compiler. Or do it by hand: `cc -O2 -o faxal native/dist/faxal.c -lm`. No Make, Python or Node is needed to build or use the language. CI builds and tests it on Linux, macOS and Windows (`.github/workflows/`).
 
 ## What the language has
 

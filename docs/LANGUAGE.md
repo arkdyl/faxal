@@ -3,8 +3,8 @@
 Faxal is a small, dynamically typed language. Programs are plain text files ending in `.fx`, run by the native `faxal` interpreter: a compiler to bytecode plus a fast virtual machine with a garbage collector. It needs nothing else installed.
 
 ```bash
-./install.sh            # Linux, macOS, BSD: builds faxal and installs it (needs only a C compiler)
-.\install.ps1           # Windows (PowerShell, with MinGW-w64 gcc or clang)
+curl -fsSL https://raw.githubusercontent.com/arkdyl/faxal/main/install.sh | sh   # Linux, macOS: downloads the latest release
+irm https://raw.githubusercontent.com/arkdyl/faxal/main/install.ps1 | iex        # Windows (PowerShell)
 ```
 
 There is nothing else to set up. To build by hand, the whole runtime is one C file, so this is the entire build on any system:

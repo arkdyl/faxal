@@ -3,39 +3,36 @@ import type { Page } from "../router";
 const OS = {
   mac: {
     name: "macOS",
-    need: "Xcode command line tools (a C compiler). If you don't have them: <code>xcode-select --install</code>.",
+    need: "Nothing: the installer downloads a ready-made program. A C compiler (<code>xcode-select --install</code>) is only needed to build from source, or for <code>faxal build --native</code>.",
     steps: [
-      ["Get the code", "git clone https://github.com/arkdyl/faxal faxal\ncd faxal"],
-      ["Build and install", "./install.sh"],
+      ["Install (downloads the latest release)", "curl -fsSL https://raw.githubusercontent.com/arkdyl/faxal/main/install.sh | sh"],
       ["Check it works", "faxal --version\nfaxal -e 'print(\"hello from faxal\")'"],
     ],
-    by_hand: "cc -O2 -o faxal native/dist/faxal.c -lm\n./faxal --version",
+    by_hand: "git clone https://github.com/arkdyl/faxal faxal && cd faxal\ncc -O2 -o faxal native/dist/faxal.c -lm\n./faxal --version",
     where: "<code>/usr/local/bin/faxal</code> if you can write there, otherwise <code>~/.faxal/bin/faxal</code> (the installer tells you what to add to your PATH).",
-    status: "The main development platform: everything is tested here.",
+    status: "The main development platform: Apple Silicon and Intel builds, everything tested here.",
   },
   linux: {
     name: "Linux",
-    need: "A C compiler: <code>sudo apt install build-essential</code> (Debian, Ubuntu), <code>sudo dnf install gcc</code> (Fedora) or <code>sudo pacman -S gcc</code> (Arch).",
+    need: "Nothing: the installer downloads a ready-made program (x86_64 or ARM64). A C compiler (<code>sudo apt install build-essential</code>, <code>sudo dnf install gcc</code> or <code>sudo pacman -S gcc</code>) is only needed to build from source, or for <code>faxal build --native</code>.",
     steps: [
-      ["Get the code", "git clone https://github.com/arkdyl/faxal faxal\ncd faxal"],
-      ["Build and install", "./install.sh"],
+      ["Install (downloads the latest release)", "curl -fsSL https://raw.githubusercontent.com/arkdyl/faxal/main/install.sh | sh"],
       ["Check it works", "faxal --version\nfaxal -e 'print(\"hello from faxal\")'"],
     ],
-    by_hand: "cc -O2 -o faxal native/dist/faxal.c -lm\n./faxal --version",
+    by_hand: "git clone https://github.com/arkdyl/faxal faxal && cd faxal\ncc -O2 -o faxal native/dist/faxal.c -lm\n./faxal --version",
     where: "<code>/usr/local/bin/faxal</code> if you can write there, otherwise <code>~/.faxal/bin/faxal</code>.",
-    status: "Supported: the code is written for it and a CI build checks every change, but it has had less everyday use than macOS.",
+    status: "Supported: every change is built and tested on Linux (including a memory-sanitizer run), though it has had less everyday use than macOS.",
   },
   windows: {
     name: "Windows",
-    need: "A C compiler: MinGW-w64 gcc or clang. For example: <code>winget install BrechtSanders.WinLibs.POSIX.UCRT</code>.",
+    need: "Nothing: the installer downloads a ready-made <code>faxal.exe</code>. A C compiler (MinGW-w64 gcc or clang, for example <code>winget install BrechtSanders.WinLibs.POSIX.UCRT</code>) is only needed to build from source, or for <code>faxal build --native</code>.",
     steps: [
-      ["Get the code", "git clone https://github.com/arkdyl/faxal faxal\ncd faxal"],
-      ["Build and install (PowerShell)", ".\\install.ps1"],
+      ["Install (PowerShell; downloads the latest release)", "irm https://raw.githubusercontent.com/arkdyl/faxal/main/install.ps1 | iex"],
       ["Check it works (in a new terminal)", "faxal --version\nfaxal -e 'print(\"hello from faxal\")'"],
     ],
-    by_hand: "gcc -O2 -o faxal.exe native/dist/faxal.c\n.\\faxal.exe --version",
+    by_hand: "git clone https://github.com/arkdyl/faxal faxal; cd faxal\ngcc -O2 -o faxal.exe native/dist/faxal.c\n.\\faxal.exe --version",
     where: "<code>%LOCALAPPDATA%\\faxal\\bin\\faxal.exe</code>, which the installer adds to your PATH.",
-    status: "Supported in the same way as Linux: written for it and built by CI, with less everyday use.",
+    status: "Supported: every change is built and tested on Windows by CI, though it has had less everyday use than macOS.",
   },
 } as const;
 type Key = keyof typeof OS;
@@ -56,13 +53,13 @@ export const install: Page = {
       view.innerHTML = `
         <section class="wrap page-head">
           <h1 class="h-xl">Install Faxal</h1>
-          <p class="lead">One C compiler is all you need. The whole language is a single C file, so there is nothing to download and nothing to configure.</p>
+          <p class="lead">One command downloads a ready-made program. Or build it yourself: the whole language is a single C file, so a C compiler is all it takes.</p>
         </section>
         <section class="wrap install-page">
           <div class="tabs" role="tablist">
             ${(Object.keys(OS) as Key[]).map((k) => `<button role="tab" aria-selected="${k === key}" data-os="${k}" class="tab">${OS[k].name}</button>`).join("")}
           </div>
-          <p class="note-line"><b>You need:</b> ${o.need}</p>
+          <p class="note-line"><b>Requirements:</b> ${o.need}</p>
           <ol class="steps">
             ${o.steps.map(([title, code], i) => `<li><span class="step-n">${i + 1}</span><div><h3>${title}</h3>${block(code)}</div></li>`).join("")}
           </ol>
@@ -80,7 +77,7 @@ export const install: Page = {
           </div>
           <h2 class="h-md">If something goes wrong</h2>
           <ul class="faq-list">
-            <li><b>"no C compiler found"</b> — install one (see "You need" above) and run the installer again.</li>
+            <li><b>"no C compiler found"</b> — this only happens when no ready-made program exists for your system. Install a C compiler (see "Requirements" above) and run the installer again.</li>
             <li><b>"faxal: command not found"</b> — the folder it was installed to isn't on your PATH. The installer prints the exact line to add.</li>
             <li><b>The build fails</b> — run <code>cc -O2 -o faxal native/dist/faxal.c -lm</code> yourself and look at the first error. It needs a C11 compiler.</li>
           </ul>

@@ -2,8 +2,8 @@
 #
 #   From a checkout of this repository (needs a C compiler: MinGW-w64 gcc, or clang):
 #       .\install.ps1
-#   From the web, once the project is published:
-#       $env:FAXAL_BASE_URL = "https://your.host/faxal"; irm "$env:FAXAL_BASE_URL/install.ps1" | iex
+#   From the web (downloads the latest release):
+#       irm https://raw.githubusercontent.com/arkdyl/faxal/main/install.ps1 | iex
 #
 # Options (environment variables): FAXAL_BASE_URL, FAXAL_HOME (default %LOCALAPPDATA%\faxal), CC.
 
@@ -21,7 +21,8 @@ $prebuilt = $false
 if ($here -and (Test-Path (Join-Path $here "native\dist\faxal.c"))) {
   $source = Join-Path $here "native\dist\faxal.c"
   Say "building from $source"
-} elseif ($env:FAXAL_BASE_URL) {
+} else {
+  if (-not $env:FAXAL_BASE_URL) { $env:FAXAL_BASE_URL = "https://github.com/arkdyl/faxal/releases/latest/download" }
   Say "downloading from $env:FAXAL_BASE_URL"
   try {
     Invoke-WebRequest "$env:FAXAL_BASE_URL/faxal-windows-x86_64.exe" -OutFile (Join-Path $bin "faxal.exe")
@@ -31,8 +32,6 @@ if ($here -and (Test-Path (Join-Path $here "native\dist\faxal.c"))) {
     $source = Join-Path $env:TEMP "faxal.c"
     Invoke-WebRequest "$env:FAXAL_BASE_URL/faxal.c" -OutFile $source
   }
-} else {
-  throw "run this from a checkout of the repository, or set FAXAL_BASE_URL"
 }
 
 if (-not $prebuilt) {

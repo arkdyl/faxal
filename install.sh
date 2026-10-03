@@ -3,13 +3,12 @@
 #
 #   From a checkout of this repository (builds from the single C file, needs only a C compiler):
 #       ./install.sh
-#   From the web, once the project is published (set FAXAL_BASE_URL to wherever faxal.c and the
-#   release files live, then):
-#       curl -fsSL "$FAXAL_BASE_URL/install.sh" | FAXAL_BASE_URL="$FAXAL_BASE_URL" sh
+#   From the web (downloads the latest release; builds from faxal.c if there is no binary for your system):
+#       curl -fsSL https://raw.githubusercontent.com/arkdyl/faxal/main/install.sh | sh
 #
 # Options (environment variables):
 #   PREFIX=/usr/local      where to install (bin/faxal and share/faxal/faxal.c); default ~/.faxal if /usr/local isn't writable
-#   FAXAL_BASE_URL=...     base URL holding faxal.c (and optionally prebuilt faxal-<os>-<arch> files)
+#   FAXAL_BASE_URL=...     where faxal.c and the prebuilt faxal-<os>-<arch> files live (default: the latest GitHub release)
 #   CC=cc                  the C compiler to use
 
 set -eu
@@ -43,7 +42,8 @@ source_c=""
 if [ -n "$here" ] && [ -f "$here/native/dist/faxal.c" ]; then
   source_c="$here/native/dist/faxal.c"
   say "building from $source_c"
-elif [ -n "${FAXAL_BASE_URL:-}" ]; then
+else
+  FAXAL_BASE_URL=${FAXAL_BASE_URL:-https://github.com/arkdyl/faxal/releases/latest/download}
   say "downloading from $FAXAL_BASE_URL"
   if fetch "$FAXAL_BASE_URL/faxal-$os-$arch" "$work/faxal" 2>/dev/null; then
     chmod +x "$work/faxal"
@@ -56,8 +56,6 @@ elif [ -n "${FAXAL_BASE_URL:-}" ]; then
     fetch "$FAXAL_BASE_URL/faxal.c" "$work/faxal.c" || die "could not download faxal.c from $FAXAL_BASE_URL"
     source_c="$work/faxal.c"
   fi
-else
-  die "run this from a checkout of the repository, or set FAXAL_BASE_URL"
 fi
 
 if [ -n "$source_c" ]; then
