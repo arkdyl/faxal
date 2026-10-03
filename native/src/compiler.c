@@ -23,14 +23,14 @@ typedef enum {
   T_CLASS, T_EXTENDS, T_SELF, T_SUPER, T_BY,
   T_PIPE, T_QQ, T_QDOT, T_ARROW, T_RARROW, T_ASYNC, T_AWAIT,
   T_ERROR, T_EOF
-} TokenType;
+} FxTokenType;
 
-typedef struct { TokenType type; const char* start; int length; int line; const char* lineStart; } Token;
+typedef struct { FxTokenType type; const char* start; int length; int line; const char* lineStart; } Token;
 
 typedef struct {
   const char* start; const char* current; int line; const char* lineStart;
   int tokLine; const char* tokLineStart;
-  TokenType last; char brackets[256]; int depth; bool eofSemi;
+  FxTokenType last; char brackets[256]; int depth; bool eofSemi;
 } Scanner;
 
 static Scanner scanner;
@@ -42,7 +42,7 @@ static void initScanner(const char* source, int line) {
   scanner.last = T_SEMI;
 }
 
-static bool needsSemi(TokenType t) {
+static bool needsSemi(FxTokenType t) {
   switch (t) {
     case T_IDENT: case T_SELF: case T_NUMBER: case T_STRING: case T_FSTRING: case T_RPAREN: case T_RBRACKET: case T_RBRACE:
     case T_TRUE: case T_FALSE: case T_NIL: case T_BREAK: case T_CONTINUE: case T_RETURN: return true;
@@ -71,7 +71,7 @@ static bool continuationAhead(const char* p) {
   return false;
 }
 
-static Token makeToken(TokenType type) {
+static Token makeToken(FxTokenType type) {
   Token t = { type, scanner.start, (int)(scanner.current - scanner.start), scanner.tokLine, scanner.tokLineStart };
   scanner.last = type;
   if (type == T_LPAREN || type == T_LBRACKET || type == T_LBRACE) {
@@ -92,8 +92,8 @@ static bool newlinesSignificant(void) {
   return scanner.depth == 0 || (scanner.depth <= 256 && scanner.brackets[scanner.depth - 1] == '{');
 }
 
-static TokenType keywordType(const char* s, int n) {
-  static const struct { const char* w; TokenType t; } kw[] = {
+static FxTokenType keywordType(const char* s, int n) {
+  static const struct { const char* w; FxTokenType t; } kw[] = {
     {"and", T_AND}, {"async", T_ASYNC}, {"await", T_AWAIT}, {"break", T_BREAK}, {"catch", T_CATCH}, {"by", T_BY}, {"class", T_CLASS}, {"extends", T_EXTENDS}, {"self", T_SELF}, {"super", T_SUPER}, {"continue", T_CONTINUE}, {"else", T_ELSE},
     {"false", T_FALSE}, {"fn", T_FN}, {"for", T_FOR}, {"if", T_IF}, {"import", T_IMPORT}, {"in", T_IN},
     {"let", T_LET}, {"nil", T_NIL}, {"not", T_NOT}, {"or", T_OR}, {"return", T_RETURN}, {"throw", T_THROW},
@@ -322,9 +322,9 @@ static void advance(void) {
   }
 }
 
-static bool check(TokenType t) { return parser.current.type == t; }
-static bool match(TokenType t) { if (!check(t)) return false; advance(); return true; }
-static void consume(TokenType t, const char* m) {
+static bool check(FxTokenType t) { return parser.current.type == t; }
+static bool match(FxTokenType t) { if (!check(t)) return false; advance(); return true; }
+static void consume(FxTokenType t, const char* m) {
   if (check(t)) { advance(); return; }
   errorAtCurrent(m);
 }
@@ -518,7 +518,7 @@ static void expression(void);
 static void statement(void);
 static void declaration(void);
 static void block(void);
-static ParseRule* getRule(TokenType t);
+static ParseRule* getRule(FxTokenType t);
 static void parsePrecedence(Precedence p);
 
 static int nesting = 0;
@@ -681,14 +681,14 @@ static void grouping(bool canAssign) {
 
 static void unary(bool canAssign) {
   (void)canAssign;
-  TokenType op = parser.previous.type;
+  FxTokenType op = parser.previous.type;
   if (op == T_NOT) { parsePrecedence(PREC_EQUALITY); emitByte(OP_NOT); }
   else { parsePrecedence(PREC_UNARY); emitByte(OP_NEG); }
 }
 
 static void binary(bool canAssign) {
   (void)canAssign;
-  TokenType op = parser.previous.type;
+  FxTokenType op = parser.previous.type;
   ParseRule* rule = getRule(op);
   parsePrecedence(op == T_STARSTAR ? PREC_POWER : (Precedence)(rule->precedence + 1));
   switch (op) {
@@ -1044,7 +1044,7 @@ static ParseRule rules[T_EOF + 1] = {
   [T_PIPE] = {NULL, pipeOp, PREC_PIPE}, [T_QQ] = {NULL, coalesce, PREC_COALESCE}, [T_QDOT] = {NULL, optionalDot, PREC_CALL}, [T_BY] = {NULL, binary, PREC_RANGE}, [T_SUPER] = {super_, NULL, PREC_NONE},
 };
 
-static ParseRule* getRule(TokenType t) { return &rules[t]; }
+static ParseRule* getRule(FxTokenType t) { return &rules[t]; }
 
 /* -------------------------------------------------------------- statements */
 

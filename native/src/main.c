@@ -278,8 +278,10 @@ int main(int argc, char** argv) {
     }
   }
 
+  /* leave early without leaking the program text */
+#define BAIL(code) do { free(source); vmFree(); return (code); } while (0)
   ObjModule* mod = loadMainModule(name);
-  if (!startSelfHosted()) return EX_SOFTWARE;
+  if (!startSelfHosted()) BAIL(EX_SOFTWARE);
   Value osv;
   if (mapGet(&vm.builtins, OBJ_VAL(cstring("os")), &osv) && IS_MAP(osv))
     defineValue(&AS_MAP(osv)->map, "script", OBJ_VAL(mod->path));
@@ -287,14 +289,14 @@ int main(int argc, char** argv) {
   if (isBytecode) {
     char err[400];
     ObjFunction* f = bytecodeRead((const unsigned char*)source, sourceLen, mod, NULL, 0, err, sizeof err);
-    if (!f) { fprintf(stderr, "faxal: cannot use '%s': %s\n", script ? script : tool, err); return EX_DATAERR; }
-    if (compileMode) { fprintf(stderr, "faxal: '%s' is already compiled\n", script); return EX_USAGE; }
+    if (!f) { fprintf(stderr, "faxal: cannot use '%s': %s\n", script ? script : tool, err); BAIL(EX_DATAERR); }
+    if (compileMode) { fprintf(stderr, "faxal: '%s' is already compiled\n", script); BAIL(EX_USAGE); }
     if (dumpMode) { bytecodeDump(f); status = 0; }
     else if (check) { printf("%s: ok (verified)\n", script); status = 0; }
     else status = runFunction(f);
   } else if (compileMode) {
     ObjFunction* f = compile(source, mod, NULL);
-    if (!f) return EX_DATAERR;
+    if (!f) BAIL(EX_DATAERR);
     char defaultOut[PATH_MAX];
     if (!outPath) {
       snprintf(defaultOut, sizeof defaultOut, "%s", script ? script : "out");
@@ -305,7 +307,7 @@ int main(int argc, char** argv) {
     }
     Buffer b; bufInit(&b);
     const char* base = script && strrchr(script, '/') ? strrchr(script, '/') + 1 : (script ? script : "out.fx");
-    if (!bytecodeWrite(f, base, &b)) { fputs("faxal: cannot write this program as bytecode\n", stderr); return EX_SOFTWARE; }
+    if (!bytecodeWrite(f, base, &b)) { fputs("faxal: cannot write this program as bytecode\n", stderr); bufFree(&b); BAIL(EX_SOFTWARE); }
     if (emitC) {
       /* print a C array instead of writing a file: this is how the standard library is built into faxal (make embed) */
       printf("static const unsigned char %s[] = {", emitC);
@@ -316,7 +318,7 @@ int main(int argc, char** argv) {
       goto finished;
     }
     FILE* out = fopen(outPath, "wb");
-    if (!out) { fprintf(stderr, "faxal: cannot write '%s'\n", outPath); return EX_IOERR; }
+    if (!out) { fprintf(stderr, "faxal: cannot write '%s'\n", outPath); bufFree(&b); BAIL(EX_IOERR); }
     fwrite(b.data, 1, (size_t)b.len, out);
     fclose(out);
     printf("compiled %s -> %s (%d bytes)\n", script ? script : "<stdin>", outPath, b.len);
@@ -347,4 +349,5 @@ finished:;
   free(source);
   vmFree();
   return vm.jsonMode ? 0 : status;
+#undef BAIL
 }

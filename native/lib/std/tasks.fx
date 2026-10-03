@@ -89,14 +89,15 @@ class Channel {
 let _loop = nil
 
 class Loop {
-  fn init() {
+  fn init(virtual = false) {
     self.ready = []        # [task, value, is_error]
     self.timers = []       # {at, fire}
     self.pollers = []      # {task, wait}
     self.tasks = []
-    self.skew = 0          # the pretend clock (safe mode)
+    self.skew = 0          # the pretend clock (safe mode, or run(main, true))
+    self.virtual = virtual # true: time exists only on the pretend clock, so runs are exactly repeatable
   }
-  fn now() => time.now() + self.skew
+  fn now() => self.virtual and self.skew or time.now() + self.skew
 }
 
 fn _schedule(task, value, is_error = false) { _loop.ready.push([task, value, is_error]) }
@@ -229,7 +230,7 @@ fn _wake_timers() {
   }
   let wait = lp.timers[first].at - lp.now()
   if wait > 0 {
-    if time.sleep != nil { time.sleep(wait) } else { lp.skew += wait }
+    if time.sleep != nil and not lp.virtual { time.sleep(wait) } else { lp.skew += wait }
   }
   let now = lp.now()
   let due = []
@@ -255,9 +256,10 @@ fn _poll_all() {
 
 # Starts the scheduler, runs `main` (a coroutine from an async fn call, or a function) to the end and returns its result.
 # Throws the error if it failed, or if a task that nobody awaited failed.
-fn run(main) {
+# run(main, true) uses a pretend clock only: sleeping takes no time and tasks always finish in the same order.
+fn run(main, virtual = false) {
   let previous = _loop
-  let lp = Loop()
+  let lp = Loop(virtual)
   _loop = lp
   let main_task = nil
   let problem = nil

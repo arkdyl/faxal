@@ -217,7 +217,7 @@ print(deck.len(), random.sample(deck, 2).len(), random.int(1, 6) <= 6)    # 5 2 
 
 ## std/tasks
 
-`run spawn sleep gather timeout Channel` for `async fn` and `await`. See "Coroutines and async" in the language docs.
+`run spawn sleep gather timeout Channel` for `async fn` and `await`. See "Coroutines and async" in the language docs. `tasks.run(main, true)` uses a pretend clock only, so sleeping takes no time and tasks always finish in the same order (handy in tests).
 
 ## std/test
 

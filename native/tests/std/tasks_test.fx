@@ -29,14 +29,14 @@ t.test("spawned tasks run at the same time", fn() {
     let b = await fast
     return [a, b]
   }
-  t.eq(tasks.run(main()), ["slow", "fast"])
+  t.eq(tasks.run(main(), true), ["slow", "fast"])
   t.eq(log, ["start slow", "start fast", "end fast", "end slow"])
 })
 
 t.test("gather collects results in order", fn() {
   let log = []
   async fn main() { return await tasks.gather([work(log, "a", 0.03), work(log, "b", 0.01), work(log, "c", 0.02)]) }
-  t.eq(tasks.run(main()), ["a", "b", "c"])
+  t.eq(tasks.run(main(), true), ["a", "b", "c"])
   t.eq(log.slice(3), ["end b", "end c", "end a"])
   async fn empty() { return await tasks.gather([]) }
   t.eq(tasks.run(empty()), [])

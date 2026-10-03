@@ -66,6 +66,15 @@
   #ifndef strdup
   #define strdup _strdup
   #endif
+  /* MinGW and MSVC have no strndup */
+  static inline char* fx_strndup(const char* s, size_t n) {
+    size_t len = 0;
+    while (len < n && s[len]) len++;
+    char* r = (char*)malloc(len + 1);
+    if (r) { memcpy(r, s, len); r[len] = '\0'; }
+    return r;
+  }
+  #define strndup fx_strndup
 #else
   #include <unistd.h>
   #include <dirent.h>
