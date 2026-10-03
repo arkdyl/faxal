@@ -62,6 +62,14 @@ Programs can be compiled ahead of time to **bytecode files** (`.fxc`, see `docs/
 
 What is still C: the virtual machine, the garbage collector and the built-in functions (`native/src/`). A Faxal program can't run without something that runs it, so that part stays native.
 
+## Nothing to depend on
+
+The whole runtime (virtual machine, garbage collector, built-in functions and the embedded bytecode of the compiler, library and tools) can be written out as **one C file**, `native/dist/faxal.c`, by a Faxal program (`native/tools/amalgamate.fx`). `cc -O2 -o faxal faxal.c -lm` is the entire build: no Make, no package manager, nothing to download. All the system-specific code (Linux, macOS, Windows) lives in one header, `platform.h`. A Faxal program can also be turned into one C file with `faxal build --c`, which any C compiler turns into a native executable on a machine that never had Faxal installed.
+
+## Concurrency without threads
+
+Faxal has coroutines: a function with a stack of its own that can pause with `yield` and continue later. `async fn` and `await` are built on them: an `async` function returns a coroutine, `await` hands what it waits for to the scheduler in `std/tasks`, and the scheduler runs other tasks in the meantime. Everything runs on one thread and tasks switch only at `await`, so programs have no data races and the virtual machine stays simple. The scheduler itself is a Faxal program.
+
 ## How it is tested
 
 - **Specs:** every language feature has small programs with their expected output (`native/tests/spec/`).
@@ -75,6 +83,6 @@ What is still C: the virtual machine, the garbage collector and the built-in fun
 
 ## What Faxal does not try to be
 
-- A language with static types, threads, or a huge ecosystem.
+- A language with a strict static type system, parallel threads, or a huge ecosystem. Types are optional and checked while the program runs, and `async` tasks take turns on one thread.
 - Compatible with any other language. Faxal programs should be easy to read and write, not easy to port.
 - A research language. Its ideas are known ideas, chosen carefully.

@@ -5,3 +5,4 @@ native/bin
 *.svg.tmp
 *.fxc
 !native/tests/fxc/*.fxc
+.claude/

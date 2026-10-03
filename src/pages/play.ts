@@ -24,7 +24,7 @@ const TEMPLATE = `
     <section class="pane out-pane">
       <div class="canvas-wrap">
         <canvas id="canvas"></canvas>
-        <div class="canvas-empty" id="empty">Use <code>forward()</code> and <code>turn()</code> to draw</div>
+        <div class="canvas-empty" id="empty"><span>Use <code>forward()</code> and <code>turn()</code> to draw</span></div>
       </div>
       <div class="console">
         <div class="console-head"><span>Output</span><button id="clear" class="link-btn">Clear</button></div>
@@ -109,6 +109,12 @@ export const play: Page = {
         editor.setValue("# " + (e as Error).message + "\n");
         meta.textContent = "Couldn't load this program";
       }
+    } else if (location.hash.startsWith("#code=")) {
+      // "Open" buttons in the docs pass the code in the address, base64url-encoded
+      try {
+        const bin = atob(location.hash.slice(6).replace(/-/g, "+").replace(/_/g, "/"));
+        editor.setValue(new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))));
+      } catch { editor.setValue("# Couldn't read the code from the link\n"); }
     } else {
       const ex = byId(query.get("example") ?? "") ?? byId("spiral")!;
       editor.setValue(ex.code);

@@ -3,7 +3,7 @@ const files = import.meta.glob("../examples/*.fx", { query: "?raw", import: "def
 
 export interface Example { id: string; title: string; code: string }
 
-const ORDER = ["hello", "spiral", "rosette", "star", "tree", "snowflake", "mandala", "shapes", "lists", "fib", "closures", "classes", "pipes", "stdlib", "errors"];
+const ORDER = ["hello", "spiral", "rosette", "star", "tree", "snowflake", "mandala", "shapes", "lists", "fib", "closures", "classes", "types", "generators", "async_tasks", "regex_dates", "pipes", "stdlib", "errors"];
 
 export const EXAMPLES: Example[] = Object.entries(files)
   .filter(([, code]) => !code.includes("# cli-only"))

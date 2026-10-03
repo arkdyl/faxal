@@ -35,7 +35,7 @@ async function show() {
     document.title = r.page.title;
     document.body.dataset.theme = r.page.theme;
     document.querySelectorAll<HTMLAnchorElement>("[data-nav]").forEach((a) =>
-      a.classList.toggle("active", a.getAttribute("href") === path));
+      a.classList.toggle("active", ((h) => path === h || path.startsWith(h + "/") || (h === "/play" && path.startsWith("/s/")))(a.getAttribute("href")!)));
     view.replaceChildren();
     window.scrollTo(0, 0);
     const c = await r.page.render(view, params);
