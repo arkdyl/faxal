@@ -2,9 +2,6 @@
 #include "faxal.h"
 #include <math.h>
 #include <limits.h>
-#include <unistd.h>
-#include <libgen.h>
-#include <sys/stat.h>
 
 extern const MethodDef stringMethods[], listMethods[], mapMethods[], rangeMethods[];
 
@@ -152,7 +149,7 @@ void vmFree(void) {
 ObjModule* loadMainModule(const char* path) {
   char resolved[PATH_MAX];
   const char* name = path;
-  if (path[0] != '<' && realpath(path, resolved)) name = resolved;
+  if (path[0] != '<' && fx_realpath(path, resolved)) name = resolved;
   ObjModule* m = newModule(cstring(name));
   vm.mainModule = m;
   return m;
@@ -439,8 +436,7 @@ static void normalizePath(const char* in, char* out, size_t cap) {
 typedef bool (*ExistsFn)(const char* path, char* resolved);
 
 static bool fsExists(const char* path, char* resolved) {
-  struct stat st;
-  return realpath(path, resolved) != NULL && stat(resolved, &st) == 0 && S_ISREG(st.st_mode);
+  return fx_realpath(path, resolved) && fx_is_file(resolved);
 }
 
 static bool bundleExists(const char* path, char* resolved) {
@@ -607,7 +603,6 @@ static bool safePoint(void) {
   return true;
 }
 
-static int utf8Len(unsigned char c) { return c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 1; }
 
 static bool run(int base) {
   CallFrame* frame = &vm.frames[vm.frameCount - 1];

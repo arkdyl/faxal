@@ -4,12 +4,7 @@
 #include <ctype.h>
 #include <time.h>
 #include <errno.h>
-#include <dirent.h>
-#include <unistd.h>
 #include <limits.h>
-#include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/wait.h>
 
 #define NATIVE(name) static bool name(int argc, Value* args, Value* out)
 #define UNUSED (void)argc; (void)args; (void)out
@@ -159,6 +154,57 @@ NATIVE(n_isinstance) {
   return true;
 }
 
+
+/* __check(value, "num|str", "parameter 'x' of f()") backs the optional type annotations (fn f(x: num) -> str).
+   The compiler emits calls to it; it returns the value when the type fits and throws a type error when not. */
+static bool typeNameMatches(Value v, const char* t, size_t n) {
+#define IS_T(s) (n == sizeof(s) - 1 && memcmp(t, s, n) == 0)
+  if (IS_T("any")) return true;
+  if (IS_T("num") || IS_T("number")) return IS_NUM(v);
+  if (IS_T("int")) return IS_NUM(v) && AS_NUM(v) == floor(AS_NUM(v)) && isfinite(AS_NUM(v));
+  if (IS_T("str") || IS_T("string")) return IS_STRING(v);
+  if (IS_T("bool") || IS_T("boolean")) return IS_BOOL(v);
+  if (IS_T("nil")) return IS_NIL(v);
+  if (IS_T("list")) return IS_LIST(v);
+  if (IS_T("map")) return IS_MAP(v);
+  if (IS_T("range")) return IS_RANGE(v);
+  if (IS_T("fn") || IS_T("function")) return IS_CALLABLE(v);
+  if (IS_T("class")) return IS_CLASS(v);
+#undef IS_T
+  if (IS_INSTANCE(v)) {   /* anything else names a class */
+    for (ObjClass* k = AS_INSTANCE(v)->klass; k; k = k->super)
+      if ((size_t)k->name->length == n && memcmp(k->name->chars, t, n) == 0) return true;
+  }
+  return false;
+}
+
+NATIVE(n_check) {
+  (void)argc;
+  if (!IS_STRING(args[1]) || !IS_STRING(args[2])) return throwError("__check() is called by the compiler");
+  const char* spec = AS_CSTRING(args[1]);
+  for (const char* p = spec; *p;) {
+    const char* e = strchr(p, '|');
+    size_t n = e ? (size_t)(e - p) : strlen(p);
+    if (typeNameMatches(args[0], p, n)) { *out = args[0]; return true; }
+    if (!e) break;
+    p = e + 1;
+  }
+  Buffer want; bufInit(&want);
+  for (const char* p = spec; *p; p++) { if (*p == '|') bufStr(&want, " or "); else bufChar(&want, *p); }
+  Buffer got; bufInit(&got);
+  bufStr(&got, typeName(args[0]));
+  if (IS_INSTANCE(args[0])) { bufStr(&got, " ("); bufStr(&got, AS_INSTANCE(args[0])->klass->name->chars); bufChar(&got, ')'); }
+  else if (IS_NUM(args[0]) || IS_BOOL(args[0]) || IS_STRING(args[0])) {
+    Buffer r; bufInit(&r);
+    bool printed = appendValue(&r, args[0], true, 0);   /* numbers, booleans and strings never run user code */
+    if (printed && r.len <= 24) { bufStr(&got, " "); bufAppend(&got, r.data, r.len); }
+    bufFree(&r);
+  }
+  bool ok = throwError("Type error: %s must be %s, got %s", AS_CSTRING(args[2]), want.data ? want.data : "?", got.data ? got.data : "?");
+  bufFree(&want); bufFree(&got);
+  return ok;
+}
+
 /* load("path") is `import` as a function: it can take a path computed at run time. */
 NATIVE(n_load) {
   (void)argc;
@@ -276,14 +322,14 @@ NATIVE(m_seed) { (void)argc; (void)out; NUM("math.seed", 0, s); rngState = (uint
 
 /* --------------------------------------------------------------- time/os/fs */
 
-static double nowSeconds(void) { struct timeval tv; gettimeofday(&tv, NULL); return (double)tv.tv_sec + tv.tv_usec / 1e6; }
+static double nowSeconds(void) { return fx_now(); }
 NATIVE(t_now) { UNUSED; *out = NUM_VAL(nowSeconds()); return true; }
 NATIVE(t_clock) { UNUSED; *out = NUM_VAL((double)clock() / CLOCKS_PER_SEC); return true; }
 NATIVE(t_sleep) {
   (void)argc; (void)out;
   NUM("time.sleep", 0, s);
   fflush(stdout);
-  if (s > 0) { struct timespec ts = { (time_t)s, (long)((s - floor(s)) * 1e9) }; nanosleep(&ts, NULL); }
+  fx_sleep(s);
   return true;
 }
 
@@ -302,22 +348,34 @@ NATIVE(os_run) {
   bufAppend(&full, cmd->chars, cmd->length);
   bufStr(&full, " 2>&1");
   fflush(stdout);
-  FILE* p = popen(full.data, "r");
+  FILE* p = fx_popen(full.data);
   bufFree(&full);
   if (!p) return throwError("Cannot run '%s': %s", cmd->chars, strerror(errno));
   Buffer o; bufInit(&o);
   char chunk[4096]; size_t n;
   while ((n = fread(chunk, 1, sizeof chunk, p)) > 0) bufAppend(&o, chunk, (int)n);
-  int status = pclose(p);
+  int code = fx_pclose(p);
   ObjMap* m = newMap();
-  defineValue(&m->map, "code", NUM_VAL(WIFEXITED(status) ? WEXITSTATUS(status) : -1));
+  defineValue(&m->map, "code", NUM_VAL(code));
   defineValue(&m->map, "output", strVal(o.data ? o.data : "", o.len));
   bufFree(&o);
   *out = OBJ_VAL(m);
   return true;
 }
 
-NATIVE(os_cwd) { UNUSED; char buf[PATH_MAX]; if (!getcwd(buf, sizeof buf)) return throwError("os.cwd() failed"); *out = strVal(buf, (int)strlen(buf)); return true; }
+/* os.stdin_read(n) reads exactly n bytes from standard input (fewer at the end of the input; nil when nothing is left). */
+NATIVE(os_stdin_read) {
+  (void)argc; INT("os.stdin_read", 0, n);
+  if (n < 0 || n > 64 * 1024 * 1024) return throwError("os.stdin_read() needs a size between 0 and 64 MB");
+  char* buf = malloc((size_t)n + 1);
+  size_t got = fread(buf, 1, (size_t)n, stdin);
+  *out = (got == 0 && n > 0) ? NIL_VAL : strVal(buf, (int)got);
+  free(buf);
+  return true;
+}
+NATIVE(os_flush) { UNUSED; fflush(stdout); *out = NIL_VAL; return true; }
+
+NATIVE(os_cwd) { UNUSED; char buf[PATH_MAX]; if (!fx_getcwd(buf, sizeof buf)) return throwError("os.cwd() failed"); *out = strVal(buf, (int)strlen(buf)); return true; }
 
 NATIVE(fs_read) {
   (void)argc;
@@ -342,25 +400,18 @@ static bool writeFile(const char* fn, int argc, Value* args, const char* mode) {
 }
 NATIVE(fs_write) { (void)out; return writeFile("fs.write", argc, args, "wb"); }
 NATIVE(fs_append) { (void)out; return writeFile("fs.append", argc, args, "ab"); }
-NATIVE(fs_exists) { (void)argc; STR("fs.exists", 0, p); *out = BOOL_VAL(access(p->chars, F_OK) == 0); return true; }
-NATIVE(fs_is_dir) { (void)argc; STR("fs.is_dir", 0, p); struct stat st; *out = BOOL_VAL(stat(p->chars, &st) == 0 && S_ISDIR(st.st_mode)); return true; }
+NATIVE(fs_exists) { (void)argc; STR("fs.exists", 0, p); *out = BOOL_VAL(fx_exists(p->chars)); return true; }
+NATIVE(fs_is_dir) { (void)argc; STR("fs.is_dir", 0, p); *out = BOOL_VAL(fx_is_dir(p->chars)); return true; }
 NATIVE(fs_remove) { (void)argc; (void)out; STR("fs.remove", 0, p); if (remove(p->chars) != 0) return throwError("Cannot remove '%s': %s", p->chars, strerror(errno)); return true; }
-NATIVE(fs_mkdir) { (void)argc; (void)out; STR("fs.mkdir", 0, p); if (mkdir(p->chars, 0777) != 0 && errno != EEXIST) return throwError("Cannot create '%s': %s", p->chars, strerror(errno)); return true; }
+NATIVE(fs_mkdir) { (void)argc; (void)out; STR("fs.mkdir", 0, p); if (!fx_mkdir(p->chars)) return throwError("Cannot create '%s': %s", p->chars, strerror(errno)); return true; }
 
 static int cmpStrPtr(const void* a, const void* b) { return strcmp(*(char* const*)a, *(char* const*)b); }
 NATIVE(fs_list) {
   (void)argc;
   STR("fs.list", 0, p);
-  DIR* d = opendir(p->chars);
-  if (!d) return throwError("Cannot list '%s': %s", p->chars, strerror(errno));
-  char** names = NULL; int n = 0, cap = 0;
-  struct dirent* e;
-  while ((e = readdir(d))) {
-    if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-    if (n == cap) { cap = cap ? cap * 2 : 16; names = realloc(names, sizeof(char*) * (size_t)cap); }
-    names[n++] = strdup(e->d_name);
-  }
-  closedir(d);
+  int n = 0;
+  char** names = fx_list_dir(p->chars, &n);
+  if (!names) return throwError("Cannot list '%s': %s", p->chars, strerror(errno));
   qsort(names, (size_t)n, sizeof(char*), cmpStrPtr);
   ObjList* l = newList();
   for (int i = 0; i < n; i++) { listPush(l, strVal(names[i], (int)strlen(names[i]))); free(names[i]); }
@@ -764,7 +815,6 @@ NATIVE(g_save_svg) {
 
 /* ------------------------------------------------------------ string methods */
 
-static int utf8Len(unsigned char c) { return c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 1; }
 
 NATIVE(s_len) { (void)argc; *out = NUM_VAL(AS_STRING(args[0])->length); return true; }
 NATIVE(s_upper) {
@@ -856,11 +906,87 @@ NATIVE(s_chars) {
 }
 NATIVE(s_lines) { (void)argc; ObjString* s = AS_STRING(args[0]); *out = splitLines(s->chars, s->length); return true; }
 
+
+static int cpCount(const char* s, int n) { int c = 0; for (int i = 0; i < n; i++) if (((unsigned char)s[i] & 0xC0) != 0x80) c++; return c; }
+
+NATIVE(s_repeat) {
+  (void)argc; INT("repeat", 1, n);
+  ObjString* s = AS_STRING(args[0]);
+  if (n < 0) return throwError("repeat() needs a count of 0 or more");
+  if ((double)n * s->length > 16777216.0) return throwError("repeat() result would be too large");
+  Buffer b; bufInit(&b);
+  for (int i = 0; i < n; i++) bufAppend(&b, s->chars, s->length);
+  *out = strVal(b.data ? b.data : "", b.len); bufFree(&b); return true;
+}
+NATIVE(s_reverse) {
+  (void)argc; ObjString* s = AS_STRING(args[0]);
+  char* r = malloc((size_t)s->length + 1);
+  int w = s->length;
+  for (int i = 0; i < s->length;) {
+    int n = utf8Len((unsigned char)s->chars[i]); if (i + n > s->length) n = s->length - i;
+    memcpy(r + w - n, s->chars + i, (size_t)n); w -= n; i += n;
+  }
+  *out = strVal(r, s->length); free(r); return true;
+}
+static bool padString(const char* fn, int argc, Value* args, Value* out, int where) {
+  int width; if (!argInt(fn, args[1], &width)) return false;
+  ObjString* s = AS_STRING(args[0]);
+  const char* fill = " "; int fillLen = 1;
+  if (argc > 2) {
+    ObjString* f; if (!argStr(fn, args[2], &f)) return false;
+    if (cpCount(f->chars, f->length) != 1) return throwError("%s() fill must be a single character", fn);
+    fill = f->chars; fillLen = f->length;
+  }
+  int have = cpCount(s->chars, s->length), pad = width - have;
+  if (pad <= 0) { *out = args[0]; return true; }
+  if (pad > 1000000) return throwError("%s() width is too large", fn);
+  int left = where == 0 ? pad : where == 1 ? 0 : pad / 2, right = pad - left;
+  Buffer b; bufInit(&b);
+  for (int i = 0; i < left; i++) bufAppend(&b, fill, fillLen);
+  bufAppend(&b, s->chars, s->length);
+  for (int i = 0; i < right; i++) bufAppend(&b, fill, fillLen);
+  *out = strVal(b.data, b.len); bufFree(&b); return true;
+}
+NATIVE(s_pad_left) { return padString("pad_left", argc, args, out, 0); }
+NATIVE(s_pad_right) { return padString("pad_right", argc, args, out, 1); }
+NATIVE(s_center) { return padString("center", argc, args, out, 2); }
+NATIVE(s_lstrip) {
+  (void)argc; ObjString* s = AS_STRING(args[0]); int a = 0;
+  while (a < s->length && isspace((unsigned char)s->chars[a])) a++;
+  *out = strVal(s->chars + a, s->length - a); return true;
+}
+NATIVE(s_rstrip) {
+  (void)argc; ObjString* s = AS_STRING(args[0]); int e = s->length;
+  while (e > 0 && isspace((unsigned char)s->chars[e - 1])) e--;
+  *out = strVal(s->chars, e); return true;
+}
+NATIVE(s_capitalize) {
+  (void)argc; ObjString* s = AS_STRING(args[0]);
+  char* r = malloc((size_t)s->length + 1); memcpy(r, s->chars, (size_t)s->length);
+  for (int i = 0; i < s->length; i++) r[i] = i == 0 ? (char)toupper((unsigned char)r[i]) : (char)tolower((unsigned char)r[i]);
+  *out = strVal(r, s->length); free(r); return true;
+}
+NATIVE(s_is_digit) {
+  (void)argc; ObjString* s = AS_STRING(args[0]);
+  bool ok = s->length > 0; for (int i = 0; i < s->length; i++) if (!isdigit((unsigned char)s->chars[i])) ok = false;
+  *out = BOOL_VAL(ok); return true;
+}
+NATIVE(s_is_alpha) {
+  (void)argc; ObjString* s = AS_STRING(args[0]);
+  bool ok = s->length > 0; for (int i = 0; i < s->length; i++) if (!isalpha((unsigned char)s->chars[i])) ok = false;
+  *out = BOOL_VAL(ok); return true;
+}
+NATIVE(s_is_empty) { (void)argc; *out = BOOL_VAL(AS_STRING(args[0])->length == 0); return true; }
+NATIVE(s_size) { (void)argc; ObjString* s = AS_STRING(args[0]); *out = NUM_VAL(cpCount(s->chars, s->length)); return true; }
+
 const MethodDef stringMethods[] = {
   {"len", s_len, 0, 0}, {"upper", s_upper, 0, 0}, {"lower", s_lower, 0, 0}, {"trim", s_trim, 0, 0},
   {"contains", s_contains, 1, 1}, {"starts_with", s_starts_with, 1, 1}, {"ends_with", s_ends_with, 1, 1},
   {"find", s_find, 1, 2}, {"count", s_count, 1, 1}, {"replace", s_replace, 2, 2},
-  {"split", s_split, 0, 1}, {"chars", s_chars, 0, 0}, {"lines", s_lines, 0, 0}, {NULL, NULL, 0, 0}
+  {"split", s_split, 0, 1}, {"chars", s_chars, 0, 0}, {"lines", s_lines, 0, 0},
+  {"repeat", s_repeat, 1, 1}, {"reverse", s_reverse, 0, 0}, {"pad_left", s_pad_left, 1, 2}, {"pad_right", s_pad_right, 1, 2},
+  {"center", s_center, 1, 2}, {"lstrip", s_lstrip, 0, 0}, {"rstrip", s_rstrip, 0, 0}, {"capitalize", s_capitalize, 0, 0},
+  {"is_digit", s_is_digit, 0, 0}, {"is_alpha", s_is_alpha, 0, 0}, {"is_empty", s_is_empty, 0, 0}, {"size", s_size, 0, 0}, {NULL, NULL, 0, 0}
 };
 
 /* -------------------------------------------------------------- list methods */
@@ -1035,12 +1161,154 @@ NATIVE(l_reduce) {
   *out = acc; return true;
 }
 
+
+static bool listArg(const char* fn, Value v) {
+  if (!IS_LIST(v)) return throwError("%s() expects a list, got %s", fn, typeName(v));
+  return true;
+}
+NATIVE(l_first) { (void)argc; ObjList* l = AS_LIST(args[0]); *out = l->count ? l->items[0] : NIL_VAL; return true; }
+NATIVE(l_last) { (void)argc; ObjList* l = AS_LIST(args[0]); *out = l->count ? l->items[l->count - 1] : NIL_VAL; return true; }
+NATIVE(l_is_empty) { (void)argc; *out = BOOL_VAL(AS_LIST(args[0])->count == 0); return true; }
+NATIVE(l_sum) {
+  (void)argc; if (!listArg("sum", args[0])) return false;
+  ObjList* l = AS_LIST(args[0]); double t = 0;
+  for (int i = 0; i < l->count; i++) {
+    if (!IS_NUM(l->items[i])) return throwError("sum() needs a list of numbers, found %s", typeName(l->items[i]));
+    t += AS_NUM(l->items[i]);
+  }
+  *out = NUM_VAL(t); return true;
+}
+NATIVE(l_min) { (void)argc; return extreme("min", 1, args, false, out); }
+NATIVE(l_max) { (void)argc; return extreme("max", 1, args, true, out); }
+NATIVE(l_any) {
+  if (!listArg("any", args[0])) return false;
+  ObjList* l = AS_LIST(args[0]);
+  if (argc > 1 && !argFn("any", args[1])) return false;
+  for (int i = 0; i < l->count; i++) {
+    Value v = l->items[i];
+    if (argc > 1) { Value item = v; if (!vmCall(args[1], 1, &item, &v)) return false; }
+    if (!isFalsey(v)) { *out = BOOL_VAL(true); return true; }
+  }
+  *out = BOOL_VAL(false); return true;
+}
+NATIVE(l_all) {
+  if (!listArg("all", args[0])) return false;
+  ObjList* l = AS_LIST(args[0]);
+  if (argc > 1 && !argFn("all", args[1])) return false;
+  for (int i = 0; i < l->count; i++) {
+    Value v = l->items[i];
+    if (argc > 1) { Value item = v; if (!vmCall(args[1], 1, &item, &v)) return false; }
+    if (isFalsey(v)) { *out = BOOL_VAL(false); return true; }
+  }
+  *out = BOOL_VAL(true); return true;
+}
+NATIVE(l_find) {
+  (void)argc; ObjList* l = AS_LIST(args[0]);
+  if (!argFn("find", args[1])) return false;
+  for (int i = 0; i < l->count; i++) {
+    Value item = l->items[i], res;
+    if (!vmCall(args[1], 1, &item, &res)) return false;
+    if (!isFalsey(res)) { *out = item; return true; }
+  }
+  *out = NIL_VAL; return true;
+}
+NATIVE(l_count) {
+  (void)argc; ObjList* l = AS_LIST(args[0]); int c = 0;
+  if (IS_CALLABLE(args[1])) {
+    for (int i = 0; i < l->count; i++) {
+      Value item = l->items[i], res;
+      if (!vmCall(args[1], 1, &item, &res)) return false;
+      if (!isFalsey(res)) c++;
+    }
+  } else for (int i = 0; i < l->count; i++) if (valuesEqual(l->items[i], args[1])) c++;
+  *out = NUM_VAL(c); return true;
+}
+NATIVE(l_extend) {
+  (void)argc; ObjList* l = AS_LIST(args[0]);
+  if (!listArg("extend", args[1])) return false;
+  ObjList* o = AS_LIST(args[1]);
+  int n = o->count;   /* l.extend(l) must not loop forever */
+  for (int i = 0; i < n; i++) listPush(l, o->items[i]);
+  *out = args[0]; return true;
+}
+NATIVE(l_unique) {
+  (void)argc; if (!listArg("unique", args[0])) return false;
+  ObjList* l = AS_LIST(args[0]); ObjList* r = newList();
+  push(OBJ_VAL(r));
+  for (int i = 0; i < l->count; i++) {
+    bool seen = false;
+    for (int j = 0; j < r->count && !seen; j++) seen = valuesEqual(r->items[j], l->items[i]);
+    if (!seen) listPush(r, l->items[i]);
+  }
+  pop();
+  *out = OBJ_VAL(r); return true;
+}
+NATIVE(l_flatten) {
+  (void)argc; if (!listArg("flatten", args[0])) return false;
+  ObjList* l = AS_LIST(args[0]); ObjList* r = newList();
+  push(OBJ_VAL(r));
+  for (int i = 0; i < l->count; i++) {
+    if (IS_LIST(l->items[i])) { ObjList* in = AS_LIST(l->items[i]); for (int j = 0; j < in->count; j++) listPush(r, in->items[j]); }
+    else listPush(r, l->items[i]);
+  }
+  pop();
+  *out = OBJ_VAL(r); return true;
+}
+NATIVE(l_sorted) {
+  if (!listArg("sorted", args[0])) return false;
+  ObjList* l = AS_LIST(args[0]); ObjList* r = newList();
+  push(OBJ_VAL(r));
+  for (int i = 0; i < l->count; i++) listPush(r, l->items[i]);
+  Value sargs[2] = { OBJ_VAL(r), argc > 1 ? args[1] : NIL_VAL };
+  bool ok = l_sort(argc > 1 ? 2 : 1, sargs, out);
+  pop();
+  if (ok) *out = OBJ_VAL(r);
+  return ok;
+}
+NATIVE(l_reversed) {
+  (void)argc; if (!listArg("reversed", args[0])) return false;
+  ObjList* l = AS_LIST(args[0]); ObjList* r = newList();
+  push(OBJ_VAL(r));
+  for (int i = l->count - 1; i >= 0; i--) listPush(r, l->items[i]);
+  pop();
+  *out = OBJ_VAL(r); return true;
+}
+NATIVE(g_zip) {
+  (void)argc; if (!listArg("zip", args[0]) || !listArg("zip", args[1])) return false;
+  ObjList* a = AS_LIST(args[0]); ObjList* b = AS_LIST(args[1]); ObjList* r = newList();
+  push(OBJ_VAL(r));
+  for (int i = 0; i < a->count && i < b->count; i++) {
+    ObjList* p = newList(); push(OBJ_VAL(p));
+    listPush(p, a->items[i]); listPush(p, b->items[i]);
+    pop(); listPush(r, OBJ_VAL(p));
+  }
+  pop();
+  *out = OBJ_VAL(r); return true;
+}
+NATIVE(g_enumerate) {
+  (void)argc; if (!listArg("enumerate", args[0])) return false;
+  ObjList* a = AS_LIST(args[0]); ObjList* r = newList();
+  push(OBJ_VAL(r));
+  for (int i = 0; i < a->count; i++) {
+    ObjList* p = newList(); push(OBJ_VAL(p));
+    listPush(p, NUM_VAL(i)); listPush(p, a->items[i]);
+    pop(); listPush(r, OBJ_VAL(p));
+  }
+  pop();
+  *out = OBJ_VAL(r); return true;
+}
+NATIVE(g_bool) { (void)argc; *out = BOOL_VAL(!isFalsey(args[0])); return true; }
+
 const MethodDef listMethods[] = {
   {"len", l_len, 0, 0}, {"push", l_push, 1, 1}, {"pop", l_pop, 0, 0}, {"insert", l_insert, 2, 2},
   {"remove", l_remove, 1, 1}, {"clear", l_clear, 0, 0}, {"contains", l_contains, 1, 1}, {"index_of", l_index_of, 1, 1},
   {"join", l_join, 0, 1}, {"reverse", l_reverse, 0, 0}, {"sort", l_sort, 0, 1}, {"slice", l_slice, 0, 2},
   {"copy", l_copy, 0, 0}, {"map", l_map, 1, 1}, {"filter", l_filter, 1, 1}, {"each", l_each, 1, 1},
-  {"reduce", l_reduce, 2, 2}, {NULL, NULL, 0, 0}
+  {"reduce", l_reduce, 2, 2},
+  {"first", l_first, 0, 0}, {"last", l_last, 0, 0}, {"is_empty", l_is_empty, 0, 0}, {"sum", l_sum, 0, 0},
+  {"min", l_min, 0, 0}, {"max", l_max, 0, 0}, {"any", l_any, 0, 1}, {"all", l_all, 0, 1}, {"find", l_find, 1, 1},
+  {"count", l_count, 1, 1}, {"extend", l_extend, 1, 1}, {"unique", l_unique, 0, 0}, {"flatten", l_flatten, 0, 0},
+  {"sorted", l_sorted, 0, 1}, {"reversed", l_reversed, 0, 0}, {NULL, NULL, 0, 0}
 };
 
 /* --------------------------------------------------------------- map methods */
@@ -1095,10 +1363,25 @@ NATIVE(mp_copy) {
   *out = OBJ_VAL(r); return true;
 }
 
+
+NATIVE(mp_is_empty) { (void)argc; *out = BOOL_VAL(AS_MAP(args[0])->map.live == 0); return true; }
+NATIVE(mp_merge) {
+  (void)argc; ObjMap* m = AS_MAP(args[0]);
+  if (!IS_MAP(args[1])) return throwError("merge() expects a map, got %s", typeName(args[1]));
+  ObjMap* o = AS_MAP(args[1]);
+  if (o == m) { *out = args[0]; return true; }
+  int n = o->map.count;
+  for (int i = 0; i < n && i < o->map.count; i++) {
+    Entry* e = &o->map.entries[i];
+    if (e->live) mapSet(&m->map, e->key, e->value);
+  }
+  *out = args[0]; return true;
+}
+
 const MethodDef mapMethods[] = {
   {"len", mp_len, 0, 0}, {"keys", mp_keys, 0, 0}, {"values", mp_values, 0, 0}, {"items", mp_items, 0, 0},
   {"has", mp_has, 1, 1}, {"get", mp_get, 1, 2}, {"remove", mp_remove, 1, 1}, {"clear", mp_clear, 0, 0},
-  {"copy", mp_copy, 0, 0}, {NULL, NULL, 0, 0}
+  {"copy", mp_copy, 0, 0}, {"is_empty", mp_is_empty, 0, 0}, {"merge", mp_merge, 1, 1}, {NULL, NULL, 0, 0}
 };
 
 NATIVE(r_len) { (void)argc; *out = NUM_VAL(rangeLength(AS_RANGE(args[0]))); return true; }
@@ -1137,8 +1420,17 @@ void registerBuiltins(void) {
   defineNative(g, "assert", n_assert, 1, 2);
   defineNative(g, "load", n_load, 1, 1);
   defineNative(g, "isinstance", n_isinstance, 2, 2);
+  defineNative(g, "__check", n_check, 3, 3);
   defineNative(g, "ord", n_ord, 1, 1);
   defineNative(g, "chr", n_chr, 1, 1);
+  defineNative(g, "bool", g_bool, 1, 1);
+  defineNative(g, "sum", l_sum, 1, 1);
+  defineNative(g, "any", l_any, 1, 2);
+  defineNative(g, "all", l_all, 1, 2);
+  defineNative(g, "sorted", l_sorted, 1, 2);
+  defineNative(g, "reversed", l_reversed, 1, 1);
+  defineNative(g, "zip", g_zip, 2, 2);
+  defineNative(g, "enumerate", g_enumerate, 1, 1);
   defineNative(g, "abs", m_abs, 1, 1);
   defineNative(g, "floor", m_floor, 1, 1);
   defineNative(g, "ceil", m_ceil, 1, 1);
@@ -1198,13 +1490,11 @@ void registerBuiltins(void) {
   ObjList* argv = newList();
   for (int i = 0; i < vm.scriptArgc; i++) listPush(argv, strVal(vm.scriptArgv[i], (int)strlen(vm.scriptArgv[i])));
   defineValue(&os->map, "args", OBJ_VAL(argv));
-#ifdef __APPLE__
-  defineValue(&os->map, "platform", OBJ_VAL(cstring("macos")));
-#else
-  defineValue(&os->map, "platform", OBJ_VAL(cstring("linux")));
-#endif
+  defineValue(&os->map, "platform", OBJ_VAL(cstring(FX_OS_NAME)));
   defineNative(&os->map, "env", os_env, 1, 1);
   defineNative(&os->map, "cwd", os_cwd, 0, 0);
+  defineNative(&os->map, "stdin_read", os_stdin_read, 1, 1);
+  defineNative(&os->map, "flush", os_flush, 0, 0);
   defineNative(&os->map, "run", os_run, 1, 1);
   defineNative(&os->map, "exit", n_exit, 0, 1);
 

@@ -15,7 +15,7 @@ let KEYWORDS = [
   "true", "false", "nil", "and", "or", "not", "try", "catch", "throw", "import",
   "class", "extends", "self", "super", "by",
 ]
-let TWO_CHAR_OPS = ["**", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "..", "|>", "??", "?."]
+let TWO_CHAR_OPS = ["**", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "..", "|>", "??", "?.", "=>", "->"]
 let ONE_CHAR_OPS = "+-*/%<>="
 let PUNCTUATION = "(){}[],:;."
 

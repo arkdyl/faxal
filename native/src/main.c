@@ -1,6 +1,5 @@
 /* main.c: the `faxal` command line: run, repl, check, -e */
 #include "faxal.h"
-#include <unistd.h>
 #include <limits.h>
 
 #define EX_USAGE 64
@@ -26,6 +25,7 @@ static void usage(FILE* to) {
     "  faxal run                     run the project's main file\n"
     "  faxal test [folder]           run *_test.fx files\n"
     "  faxal fmt [--check] [paths]   format code\n"
+    "  faxal lsp                     language server (editors talk to it over stdin/stdout)\n"
     "  faxal add <source> [name]     add a package (git repo or folder); also: install, remove, list\n"
     "  faxal build <main.fx> [-o x]  make a standalone executable (--source packs source text instead of bytecode)\n"
     "\n"
@@ -65,7 +65,7 @@ static ObjString* errorText(void) {
 
 static void reportRuntimeError(void) {
   vm.noToStr = true;
-  bool color = isatty(2);
+  bool color = fx_isatty(2);
   ObjString* msg = errorText();
   fflush(stdout);
   fprintf(stderr, "%serror%s: %s\n", color ? "\x1b[1;31m" : "", color ? "\x1b[0m" : "", msg->chars);
@@ -111,7 +111,7 @@ static bool startSelfHosted(void) {
 }
 
 static const struct { const char* command; const char* tool; } TOOLS[] = {
-  {"fmt", "tools/fmt"}, {"test", "tools/test"}, {"init", "tools/init"}, {"fxc", "tools/fxc"},
+  {"fmt", "tools/fmt"}, {"test", "tools/test"}, {"init", "tools/init"}, {"fxc", "tools/fxc"}, {"lsp", "tools/lsp"},
   {"add", "tools/pkg"}, {"remove", "tools/pkg"}, {"install", "tools/pkg"}, {"list", "tools/pkg"},
 };
 
@@ -178,6 +178,7 @@ static int repl(void) {
 }
 
 int main(int argc, char** argv) {
+  fx_binary_stdio();
   vmInit();
   if (loadBundleFromSelf()) return runBundled(argc, argv);
   bool check = false, doRepl = false, compileMode = false, dumpMode = false, buildMode = false;
@@ -237,7 +238,7 @@ int main(int argc, char** argv) {
   if (runWord && !script && !evalCode && !tool) { tool = "tools/run"; scriptArgStart = runWord; vm.scriptArgc = argc - scriptArgStart; vm.scriptArgv = argv + scriptArgStart; }
   if (doRepl) return repl();
   if (!script && !evalCode && !tool) {
-    if (isatty(0)) return repl();
+    if (fx_isatty(0)) return repl();
     script = "-";
   }
 
@@ -267,7 +268,7 @@ int main(int argc, char** argv) {
       /* a compiled program: it keeps the name of its source file, placed next to the .fxc so that imports resolve */
       isBytecode = true;
       char recorded[PATH_MAX], absolute[PATH_MAX];
-      if (bytecodeSourceName(bytes, sourceLen, recorded, sizeof recorded) && recorded[0] && realpath(script, absolute)) {
+      if (bytecodeSourceName(bytes, sourceLen, recorded, sizeof recorded) && recorded[0] && fx_realpath(script, absolute)) {
         char* slash = strrchr(absolute, '/');
         if (slash) *slash = '\0';
         const char* base = strrchr(recorded, '/');

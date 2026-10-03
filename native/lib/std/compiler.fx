@@ -158,6 +158,8 @@ class FnState {
     self.scope_depth = 0
     self.try_depth = 0
     self.loop = nil
+    self.ret_spec = ""              # the declared return type, such as "num" or "str|nil" ("" when there is none)
+    self.label = name == nil and "the function" or name[0:60] + "()"   # how error messages name this function
   }
 }
 
@@ -274,8 +276,33 @@ fn emit_loop(start) {
   emit_short(offset)
 }
 
+# Type annotations are checked while the program runs: the value on top of the stack goes through
+# __check(value, "num or str", "what it is"), which gives the value back or throws a type error.
+fn emit_check_top(spec, what) {
+  emit_byte(OP.GET_GLOBAL)
+  emit_short(identifier_constant("__check"))
+  emit_byte(OP.SWAP)
+  emit_constant(spec)
+  emit_constant(what)
+  emit_bytes(OP.CALL, 3)
+}
+
+fn spec_accepts_nil(spec) {
+  for word in spec.split("|") {
+    if word == "nil" or word == "any" { return true }
+  }
+  return false
+}
+
 fn emit_return() {
-  if cur.type == "initializer" { emit_bytes(OP.GET_LOCAL, 0) } else { emit_byte(OP.NIL) }
+  if cur.type == "initializer" {
+    emit_bytes(OP.GET_LOCAL, 0)
+  } else {
+    emit_byte(OP.NIL)
+    if cur.ret_spec != "" and not spec_accepts_nil(cur.ret_spec) {
+      emit_check_top(cur.ret_spec, "return value of " + cur.label)
+    }
+  }
   emit_byte(OP.RETURN)
 }
 
@@ -767,7 +794,28 @@ fn map_literal(can_assign) {
   emit_short(count)
 }
 
-# A function or method: parameters (with optional defaults) and a body.
+# type := name ("or" name)*   as the text "name|name"
+fn type_spec() {
+  let out = ""
+  while true {
+    if not (check("IDENT") or check("nil") or check("fn")) {
+      error_at_current("Expected a type name (num, str, bool, list, map, fn, nil, any, or a class name).")
+      return out
+    }
+    advance()
+    let word = ps.previous.text
+    if len(out) + len(word) + 2 >= 96 {
+      error("This type is too long.")
+      return out
+    }
+    if out != "" { out += "|" }
+    out += word
+    if not match("or") { break }
+  }
+  return out
+}
+
+# A function or method: parameters (with optional types and defaults) and a body.
 fn function(type, name) {
   begin_function(type, name)
   begin_scope()
@@ -781,6 +829,9 @@ fn function(type, name) {
       if cur.arity > 255 { error_at_current("Can't have more than 255 parameters.") }
       let p = parse_variable("Expected a parameter name.")
       define_variable(p)
+      let param_name = ps.previous.text
+      let param_spec = ""
+      if match(":") { param_spec = type_spec() }
       if match("=") {
         # a default value: at function entry, if the argument is nil, compute the default
         saw_default = true
@@ -796,13 +847,31 @@ fn function(type, name) {
         if saw_default { error("A parameter without a default value can't come after one that has a default.") }
         cur.min_arity += 1
       }
+      if param_spec != "" {
+        let what = "parameter '" + param_name[0:40] + "' of " + cur.label
+        emit_byte(OP.GET_GLOBAL)
+        emit_short(identifier_constant("__check"))
+        emit_bytes(OP.GET_LOCAL, (cur.locals.len() - 1) % 256)
+        emit_constant(param_spec)
+        emit_constant(what)
+        emit_bytes(OP.CALL, 3)
+        emit_byte(OP.POP)
+      }
       more = match(",")
     }
   }
   consume(")", "Expected ')' after parameters.")
-  skip_semis()
-  consume("{", "Expected '{' before function body.")
-  block()
+  if match("->") { cur.ret_spec = type_spec() }
+  if match("=>") {
+    if cur.type == "initializer" { error("Can't return a value from init().") }
+    expression()
+    if cur.ret_spec != "" { emit_check_top(cur.ret_spec, "return value of " + cur.label) }
+    emit_byte(OP.RETURN)
+  } else {
+    skip_semis()
+    consume("{", "Expected '{' before function body.")
+    block()
+  }
   let f = end_compiler()
   emit_byte(OP.CLOSURE)
   emit_short(make_constant(f))
@@ -911,9 +980,13 @@ fn scoped_block() {
 
 fn let_declaration() {
   let global = parse_variable("Expected a variable name after 'let'.")
+  let var_name = ps.previous.text
+  let spec = ""
+  if match(":") { spec = type_spec() }
   if match("=") {
     if check("fn") { mark_initialized() }   # lets a local function call itself
     expression()
+    if spec != "" { emit_check_top(spec, "variable '" + var_name[0:60] + "'") }
   } else {
     emit_byte(OP.NIL)
   }
@@ -1109,6 +1182,7 @@ fn return_statement() {
   } else {
     if cur.type == "initializer" { error("Can't return a value from init().") }
     expression()
+    if cur.ret_spec != "" { emit_check_top(cur.ret_spec, "return value of " + cur.label) }
     emit_byte(OP.RETURN)
   }
   end_statement()

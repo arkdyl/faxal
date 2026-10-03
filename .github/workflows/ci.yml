@@ -1,0 +1,61 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      # The one-file build is the portable path: it needs nothing but a C compiler.
+      - name: Build from the single C file
+        working-directory: native
+        run: |
+          mkdir -p bin
+          if [ "$RUNNER_OS" = "Windows" ]; then gcc -O2 -std=c11 -o bin/faxal.exe dist/faxal.c; else cc -O2 -std=c11 -o bin/faxal dist/faxal.c -lm; fi
+
+      - name: Standard library tests
+        working-directory: native
+        run: bin/faxal test tests/std
+
+      - name: Language spec tests
+        working-directory: native
+        run: python3 tests/run.py bin/faxal
+
+      - name: Compile-to-C
+        working-directory: native
+        run: python3 tests/native_check.py bin/faxal
+
+  full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Full test suite (formatter, tools, self-hosting, bytecode)
+        working-directory: native
+        run: make test
+      - name: Sanitizers and GC stress
+        working-directory: native
+        run: make test-debug
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: make -C native
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build

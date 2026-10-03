@@ -1,6 +1,7 @@
 #ifndef FAXAL_H
 #define FAXAL_H
 
+#include "platform.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -177,6 +178,9 @@ typedef struct {
 } VM;
 
 extern VM vm;
+
+/* the length in bytes of the UTF-8 character that starts with byte c */
+static inline int utf8Len(unsigned char c) { return c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 1; }
 
 /* ---------------------------------------------------------------- services */
 

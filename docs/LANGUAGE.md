@@ -3,11 +3,18 @@
 Faxal is a small, dynamically typed language. Programs are plain text files ending in `.fx`, run by the native `faxal` interpreter: a compiler to bytecode plus a fast virtual machine with a garbage collector. It needs nothing else installed.
 
 ```bash
-cd native
-make                    # builds bin/faxal (needs a C compiler)
-./bin/faxal --version
-sudo make install       # optional: copies faxal to /usr/local/bin
+./install.sh            # Linux, macOS, BSD: builds faxal and installs it (needs only a C compiler)
+.\install.ps1           # Windows (PowerShell, with MinGW-w64 gcc or clang)
 ```
+
+There is nothing else to set up. To build by hand, the whole runtime is one C file, so this is the entire build on any system:
+
+```bash
+cc -O2 -o faxal native/dist/faxal.c -lm     # Windows with MinGW: gcc -O2 -o faxal.exe native/dist/faxal.c
+./faxal --version
+```
+
+(Developers can also run `make -C native`, which builds `bin/faxal` from the separate source files.)
 
 ```bash
 faxal hello.fx            # run a program
@@ -88,6 +95,11 @@ Indexing and slicing work on bytes: `s[0]`, `s[-1]`, `s[2:5]`, `s[:3]`, `s[3:]`.
 | `s.replace(a, b)` | replace every `a` with `b` |
 | `s.split(sep)` | list of pieces (`s.split("")` gives characters) |
 | `s.chars()` `s.lines()` | list of characters / lines |
+| `s.repeat(n)` `s.reverse()` | new string |
+| `s.pad_left(width, fill)` `s.pad_right(width, fill)` `s.center(width, fill)` | pad to a width (`fill` is one character, default a space) |
+| `s.lstrip()` `s.rstrip()` `s.capitalize()` | new string |
+| `s.is_digit()` `s.is_alpha()` `s.is_empty()` | bool |
+| `s.size()` | length in characters (`len` counts bytes) |
 
 ## Operators
 
@@ -150,6 +162,16 @@ let double = fn(x) { return x * 2 }     # an anonymous function is a value
 print(add(2, 3), double(4))
 ```
 
+Short functions can use an arrow: `fn(x) => expression` is the same as `fn(x) { return expression }`. It works for named functions and methods too.
+
+```fx
+let nums = [3, 1, 2]
+print(nums.map(fn(x) => x * 10))                  # [30, 10, 20]
+print(nums.sorted(fn(a, b) => b - a))             # [3, 2, 1]
+fn area(w, h = w) => w * h
+print(area(3), area(3, 4))                        # 9 12
+```
+
 Functions are values: pass them, return them, store them in lists and maps. They remember the variables around them (closures), and every loop round gets its own copy of the loop variable:
 
 ```fx
@@ -169,6 +191,24 @@ fn pad(text, width, fill = " ") { return text + fill * (width - len(text)) }
 print(pad("ab", 5, "."))      # ab...
 print("[" + pad("ab", 4) + "]")   # [ab  ]
 ```
+
+### Types (optional)
+
+Parameters, return values and variables can say what type they expect. Nothing is required: untyped code works as before. When a type is given, it is **checked every time the code runs**, and a wrong value stops the program with a clear message:
+
+```fx
+fn area(w: num, h: num = 1) -> num { return w * h }
+let name: str = "Ada"
+print(area(3, 4))                                  # 12
+try { area("3") } catch e { print(e) }             # Type error: parameter 'w' of area() must be num, got string "3"
+fn find(xs: list, x: any) -> num or nil {          # "or" allows more than one type
+  let i = xs.index_of(x)
+  if i < 0 { return nil }
+  return i
+}
+```
+
+Types: `num` `int` `str` `bool` `nil` `list` `map` `range` `fn` `any`, or the name of a class (instances of subclasses also fit). Write `num or nil` for "a number, or nothing". A function with a return type must return a fitting value: forgetting to return anything is an error unless `nil` is allowed. A variable's type is checked when it is declared, not on later assignments.
 
 A function without `return` gives `nil`. Calling with the wrong number of arguments is an error. Recursion depth is limited to about 1,500 calls.
 
@@ -194,6 +234,16 @@ print(xs[1:], xs[:2])    # slices make new lists
 | `map(f)` `filter(f)` | new lists |
 | `reduce(start, f)` | fold the list into one value: `f(total, item)` |
 | `each(f)` | call `f` on every item |
+| `first()` `last()` | the first / last item (`nil` if the list is empty) |
+| `sum()` `min()` `max()` | add up / find the smallest / largest |
+| `any(f)` `all(f)` | is `f(item)` true for some / every item? (`f` is optional: items are tested themselves) |
+| `find(f)` `count(f)` | the first item where `f` is true (or `nil`) / how many; `count(x)` also counts a value |
+| `extend(other)` | add all the items of another list to the end |
+| `unique()` `flatten()` | new lists: without repeats / with inner lists opened up one level |
+| `sorted()` `sorted(cmp)` `reversed()` | new lists (the original is unchanged) |
+| `is_empty()` | no items? |
+
+The most useful ones also exist as plain functions, so they read naturally: `sum(xs)`, `sorted(xs)`, `reversed(xs)`, `any(xs, f)`, `all(xs, f)`, `zip(a, b)` (pairs) and `enumerate(xs)` (`[index, item]` pairs), plus `bool(x)`.
 
 `+` joins two lists. `==` compares lists by value.
 
@@ -220,6 +270,10 @@ print(counts)                            # {a: 2, b: 1}
 | `has(k)` `get(k, default)` | look up safely |
 | `remove(k)` | delete and return the old value |
 | `clear()` `copy()` | empty it / make a copy |
+| `merge(other)` | copy all the entries of another map into this one |
+| `is_empty()` | no entries? |
+
+A key with the same name as a method hides it: after `m["has"] = 1`, `m.has(x)` is no longer the method. If a map can have arbitrary keys, use `m[key]` to read and write them.
 
 Storing functions in a map gives you objects: `{count: 0, inc: fn() { obj.count += 1 }}`.
 
@@ -393,11 +447,16 @@ Written in Faxal itself and built into the program (`import "std/..."`):
 | `std/iter` | `enumerate zip sum product count any all find take skip reverse flatten chunks unique group_by sort_by min_by max_by partition repeat` |
 | `std/text` | `pad_left pad_right center capitalize title reverse is_digit is_alpha words truncate wrap fixed commas` |
 | `std/numbers` | `gcd lcm factorial is_prime primes_up_to mean median variance stddev remap` |
+| `std/regex` | regular expressions: `test find find_all full_match replace replace_first split escape compile` (groups, named groups, lazy quantifiers, lookahead, backreferences, `"i"` flag) |
+| `std/datetime` | dates and times (UTC): `make(y, m, d, ...)` `now()` `today()` `parse("2026-10-03 14:30")` `from_timestamp(ts)`; a DateTime has `year month day hour minute second ts`, `format("%Y-%m-%d %H:%M")`, `add_days add_months add_years add_hours ...`, `weekday()`, `days_until(other)` |
+| `std/path` | `join basename dirname ext stem split normalize with_ext is_absolute` |
+| `std/csv` | `parse(text)` (list of rows) `records(text)` (list of maps) `stringify(rows)` |
+| `std/random` | `seed int(a, b) float(a, b) choice shuffle sample chance` |
 | `std/color` | `rgb(r, g, b)` `hsl(h, s, l)` `gray(0..1)` `rainbow(i, n)`: colors for `color()` and `background()` |
 | `std/test` | `test eq ne ok close throws fail run`: the test framework behind `faxal test` |
 | `std/lex` `std/fmt` | the tokenizer and the formatter behind `faxal fmt` |
 
-Global functions: `print(...)`, `write(...)` (no newline), `input(prompt)` (returns `nil` at end of input), `len`, `str`, `repr`, `num` (text to number, or `nil`), `int`, `type`, `range`, `assert(cond, message)`, `ord`, `chr`, `abs`, `floor`, `ceil`, `round`, `sqrt`, `min`, `max`, `exit`.
+Global functions: `bool`, `sum`, `any`, `all`, `sorted`, `reversed`, `zip`, `enumerate` (see Lists), `print(...)`, `write(...)` (no newline), `input(prompt)` (returns `nil` at end of input), `len`, `str`, `repr`, `num` (text to number, or `nil`), `int`, `type`, `range`, `assert(cond, message)`, `ord`, `chr`, `abs`, `floor`, `ceil`, `round`, `sqrt`, `min`, `max`, `exit`.
 
 ## Drawing
 
@@ -438,6 +497,8 @@ faxal add user/repo       # add a package: GitHub shorthand, a git URL, or a fol
 faxal add ../shared utils # ...and choose the name you import it by
 faxal install             # install everything listed in faxal.json
 faxal build main.fx -o app    # make one standalone executable
+faxal build main.fx --native -o app   # ...as real native code, through a C compiler
+faxal lsp                 # language server for your editor (see below)
 ```
 
 A test file is plain Faxal:
@@ -465,6 +526,26 @@ faxal dump app.fxc            # show the instructions inside
 ```
 
 Compiled files are checked by a verifier before they run, so a damaged or tampered file is rejected instead of misbehaving. `import "lib"` can load a compiled `lib.fxc`. The file format is described in `docs/BYTECODE.md` in the repository. An executable made with `faxal build` carries bytecode, not source (use `faxal build --source` to carry source text).
+
+### Native programs (compile to C)
+
+`faxal build` has two more modes that go through C:
+
+```bash
+faxal build main.fx --c -o program.c     # one C file: your program plus the whole runtime
+cc -O2 -o program program.c -lm          # any C compiler turns it into a native executable
+faxal build main.fx --native -o program  # both steps at once
+```
+
+The C file contains no reference to faxal: it can be compiled on a computer that has never had faxal installed, for any system that has a C compiler (Linux, macOS, Windows with MinGW). The result is a self-contained native executable. It needs the runtime source (`faxal.c`), which `make install` and the installers put next to the `faxal` program; set `FAXAL_RUNTIME=/path/to/faxal.c` to point somewhere else. The program still runs on Faxal's virtual machine: it is a native executable, not machine code made from your functions.
+
+### The language server
+
+`faxal lsp` speaks the Language Server Protocol, so any editor that supports it gets Faxal help without a plugin written for that editor: errors as you type (checked by the real compiler), completion, hover help, format document (the same formatter as `faxal fmt`) and an outline of functions and classes. Configure your editor to run the command `faxal lsp` for `.fx` files. For example, in Neovim:
+
+```lua
+vim.lsp.start({ name = "faxal", cmd = { "faxal", "lsp" }, root_dir = vim.fn.getcwd() })
+```
 
 ### The compiler
 

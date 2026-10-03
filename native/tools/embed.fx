@@ -22,7 +22,10 @@ fn walk(dir, prefix) {
 }
 
 # Quote text for the shell.
-fn q(s) { return "'" + s.replace("'", "'\\''") + "'" }
+fn q(s) {
+  if os.platform == "windows" { return "\"" + s + "\"" }
+  return "'" + s.replace("'", "'\\''") + "'"
+}
 
 walk("lib", "")
 files.sort(fn(a, b) {

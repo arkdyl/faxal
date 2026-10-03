@@ -9,12 +9,12 @@
 #include "faxal.h"
 #include <math.h>
 
-#define MAGIC "\x7f" "FXC"   /* starts with DEL, which can never begin valid Faxal source */
+#define FXC_MAGIC "\x7f" "FXC"   /* starts with DEL, which can never begin valid Faxal source */
 #define FORMAT_VERSION 1
 #define MAX_FUNCTIONS 100000
 #define MAX_STACK_DEPTH 139000   /* below the slack the VM keeps after STACK_MAX, see faxal.h */
 
-bool bytecodeLooksLike(const unsigned char* data, size_t len) { return len >= 4 && memcmp(data, MAGIC, 4) == 0; }
+bool bytecodeLooksLike(const unsigned char* data, size_t len) { return len >= 4 && memcmp(data, FXC_MAGIC, 4) == 0; }
 
 static uint32_t checksum(const unsigned char* d, size_t n) {
   uint32_t h = 2166136261u;
@@ -43,11 +43,11 @@ static int indexOf(FnList* l, ObjFunction* f) {
 }
 
 /* Post-order walk: a function is listed after every function it contains, and the main script is last. */
-static void collect(FnList* l, ObjFunction* f) {
+static void collectFunctions(FnList* l, ObjFunction* f) {
   if (indexOf(l, f) >= 0) return;
   for (int i = 0; i < f->chunk.constants.count; i++) {
     Value c = f->chunk.constants.values[i];
-    if (IS_FUNCTION(c)) collect(l, AS_FUNCTION(c));
+    if (IS_FUNCTION(c)) collectFunctions(l, AS_FUNCTION(c));
   }
   if (l->count == l->cap) { l->cap = l->cap ? l->cap * 2 : 16; l->list = realloc(l->list, sizeof(ObjFunction*) * (size_t)l->cap); }
   l->list[l->count++] = f;
@@ -55,9 +55,9 @@ static void collect(FnList* l, ObjFunction* f) {
 
 bool bytecodeWrite(ObjFunction* main, const char* sourceName, Buffer* out) {
   FnList l = { NULL, 0, 0 };
-  collect(&l, main);
+  collectFunctions(&l, main);
 
-  bufAppend(out, MAGIC, 4);
+  bufAppend(out, FXC_MAGIC, 4);
   put16(out, FORMAT_VERSION);
   put16(out, FAXAL_BYTECODE_REVISION);
   put32(out, 0);                                  /* flags: none yet */
@@ -432,7 +432,7 @@ bool bytecodeSourceName(const unsigned char* data, size_t len, char* out, size_t
 /* Prints every function of a program, in definition order (the same text `faxal --dump` prints while compiling). */
 void bytecodeDump(ObjFunction* main) {
   FnList l = { NULL, 0, 0 };
-  collect(&l, main);
+  collectFunctions(&l, main);
   for (int i = 0; i < l.count; i++) disassembleFunction(l.list[i]);
   free(l.list);
 }

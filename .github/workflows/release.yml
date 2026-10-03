@@ -1,0 +1,41 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, name: faxal-linux-x86_64, out: faxal }
+          - { os: ubuntu-24.04-arm, name: faxal-linux-aarch64, out: faxal }
+          - { os: macos-latest, name: faxal-darwin-arm64, out: faxal }
+          - { os: macos-13, name: faxal-darwin-x86_64, out: faxal }
+          - { os: windows-latest, name: faxal-windows-x86_64.exe, out: faxal.exe }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        working-directory: native
+        run: |
+          mkdir -p bin
+          if [ "$RUNNER_OS" = "Windows" ]; then gcc -O2 -std=c11 -o bin/${{ matrix.out }} dist/faxal.c; else cc -O2 -std=c11 -o bin/${{ matrix.out }} dist/faxal.c -lm; fi
+          cp bin/${{ matrix.out }} ../${{ matrix.name }}
+      - uses: actions/upload-artifact@v4
+        with: { name: "${{ matrix.name }}", path: "${{ matrix.name }}" }
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: release, merge-multiple: true }
+      - run: cp native/dist/faxal.c install.sh install.ps1 release/
+      - uses: softprops/action-gh-release@v2
+        with: { files: release/* }

@@ -1,7 +1,6 @@
 /* compiler.c: scanner + single-pass bytecode compiler (Pratt parser) */
 #include "faxal.h"
 #include <ctype.h>
-#include <unistd.h>
 
 bool compileQuiet = false;
 bool compileCollectImports = false;
@@ -22,7 +21,7 @@ typedef enum {
   T_AND, T_OR, T_NOT, T_BREAK, T_CONTINUE, T_ELSE, T_FALSE, T_FN, T_FOR, T_IF,
   T_IMPORT, T_IN, T_LET, T_NIL, T_RETURN, T_TRUE, T_WHILE, T_TRY, T_CATCH, T_THROW,
   T_CLASS, T_EXTENDS, T_SELF, T_SUPER, T_BY,
-  T_PIPE, T_QQ, T_QDOT,
+  T_PIPE, T_QQ, T_QDOT, T_ARROW, T_RARROW,
   T_ERROR, T_EOF
 } TokenType;
 
@@ -196,14 +195,18 @@ static Token scanToken(void) {
     case ';': return makeToken(T_SEMI);
     case ':': return makeToken(T_COLON);
     case '.': return TWO('.', T_DOTDOT, T_DOT);
-    case '-': return TWO('=', T_MINUS_EQ, T_MINUS);
+    case '-':
+      if (*scanner.current == '>') { scanner.current++; return makeToken(T_RARROW); }
+      return TWO('=', T_MINUS_EQ, T_MINUS);
     case '+': return TWO('=', T_PLUS_EQ, T_PLUS);
     case '/': return TWO('=', T_SLASH_EQ, T_SLASH);
     case '%': return TWO('=', T_PERCENT_EQ, T_PERCENT);
     case '*':
       if (*scanner.current == '*') { scanner.current++; return makeToken(T_STARSTAR); }
       return TWO('=', T_STAR_EQ, T_STAR);
-    case '=': return TWO('=', T_EQEQ, T_EQ);
+    case '=':
+      if (*scanner.current == '>') { scanner.current++; return makeToken(T_ARROW); }
+      return TWO('=', T_EQEQ, T_EQ);
     case '<': return TWO('=', T_LE, T_LT);
     case '>': return TWO('=', T_GE, T_GT);
     case '!':
@@ -252,6 +255,8 @@ typedef struct Compiler {
   UpvalueRef upvalues[256];
   int scopeDepth, tryDepth;
   Loop* loop;
+  char retSpec[96];     /* the declared return type ("" when there is none), e.g. "num" or "str|nil" */
+  char label[72];       /* how error messages name this function, e.g. "add()" */
 } Compiler;
 
 typedef struct ClassCompiler { struct ClassCompiler* enclosing; bool hasSuperclass; } ClassCompiler;
@@ -267,7 +272,7 @@ static Chunk* currentChunk(void) { return &current->function->chunk; }
 /* Prints an error with the line of code and a ^^^ underline. Used by both compilers. */
 void printCompileError(const char* path, int line, int col, const char* text, int len, int tl, const char* message) {
   if (vm.jsonMode || compileQuiet) return;
-  bool color = isatty(2);
+  bool color = fx_isatty(2);
   const char *red = color ? "\x1b[1;31m" : "", *bold = color ? "\x1b[1m" : "", *dim = color ? "\x1b[2m" : "", *off = color ? "\x1b[0m" : "";
   fflush(stdout);
   fprintf(stderr, "%serror%s%s: %s%s\n", red, off, bold, message, off);
@@ -368,15 +373,43 @@ static void emitLoop(int start) {
   emitShort(offset);
 }
 
+/* Type annotations are checked while the program runs: the value on top of the stack goes through
+   __check(value, "num or str", "what it is"), which gives the value back or throws a type error. */
+static void emitCheckTop(const char* spec, const char* what) {
+  Token name = { T_IDENT, "__check", 7, 0, NULL };
+  emitByte(OP_GET_GLOBAL); emitShort(identifierConstant(&name));
+  emitByte(OP_SWAP);
+  emitConstant(OBJ_VAL(newString(spec, (int)strlen(spec))));
+  emitConstant(OBJ_VAL(newString(what, (int)strlen(what))));
+  emitBytes(OP_CALL, 3);
+}
+
+static bool specAcceptsNil(const char* spec) {
+  for (const char* p = spec; *p;) {
+    const char* e = strchr(p, '|'); size_t n = e ? (size_t)(e - p) : strlen(p);
+    if ((n == 3 && !memcmp(p, "nil", 3)) || (n == 3 && !memcmp(p, "any", 3))) return true;
+    if (!e) break;
+    p = e + 1;
+  }
+  return false;
+}
+
 static void emitReturn(void) {
   if (current->type == TYPE_INITIALIZER) emitBytes(OP_GET_LOCAL, 0); /* init() gives back the new object */
-  else emitByte(OP_NIL);
+  else {
+    emitByte(OP_NIL);
+    if (current->retSpec[0] && !specAcceptsNil(current->retSpec)) {
+      char what[128]; snprintf(what, sizeof what, "return value of %s", current->label);
+      emitCheckTop(current->retSpec, what);
+    }
+  }
   emitByte(OP_RETURN);
 }
 
 static void initCompiler(Compiler* c, FunctionType type) {
   c->enclosing = current; c->function = NULL; c->type = type;
   c->localCount = 0; c->scopeDepth = 0; c->tryDepth = 0; c->loop = NULL;
+  c->retSpec[0] = '\0'; snprintf(c->label, sizeof c->label, "the function");
   c->function = newFunction();
   c->function->module = currentModule;
   c->function->isScript = (type == TYPE_SCRIPT);
@@ -796,10 +829,29 @@ static void mapLiteral(bool canAssign) {
   emitByte(OP_BUILD_MAP); emitShort(count);
 }
 
+/* type := name ('or' name)*   written into out as "name|name". */
+static bool typeSpec(char* out, size_t cap) {
+  size_t n = 0;
+  out[0] = '\0';
+  for (;;) {
+    if (!(check(T_IDENT) || check(T_NIL) || check(T_FN))) { errorAtCurrent("Expected a type name (num, str, bool, list, map, fn, nil, any, or a class name)."); return false; }
+    advance();
+    size_t len = (size_t)parser.previous.length;
+    if (n + len + 2 >= cap) { error("This type is too long."); return false; }
+    if (n) out[n++] = '|';
+    memcpy(out + n, parser.previous.start, len); n += len; out[n] = '\0';
+    if (!match(T_OR)) break;
+  }
+  return true;
+}
+
 static void function(FunctionType type, Token* name) {
   Compiler c;
   initCompiler(&c, type);
-  if (name) c.function->name = newString(name->start, name->length);
+  if (name) {
+    c.function->name = newString(name->start, name->length);
+    snprintf(c.label, sizeof c.label, "%.*s()", name->length > 60 ? 60 : name->length, name->start);
+  }
   beginScope();
   consume(T_LPAREN, "Expected '(' before parameters.");
   bool sawDefault = false;
@@ -810,6 +862,9 @@ static void function(FunctionType type, Token* name) {
       if (current->function->arity > 255) errorAtCurrent("Can't have more than 255 parameters.");
       int p = parseVariable("Expected a parameter name.");
       defineVariable(p);
+      Token paramName = parser.previous;
+      char paramSpec[96]; paramSpec[0] = '\0';
+      if (match(T_COLON)) typeSpec(paramSpec, sizeof paramSpec);
       if (match(T_EQ)) {
         /* default value: at function entry, if the argument is nil, compute the default */
         sawDefault = true;
@@ -825,12 +880,31 @@ static void function(FunctionType type, Token* name) {
         if (sawDefault) error("A parameter without a default value can't come after one that has a default.");
         current->function->minArity++;
       }
+      if (paramSpec[0]) {
+        char what[160]; snprintf(what, sizeof what, "parameter '%.*s' of %s", paramName.length > 40 ? 40 : paramName.length, paramName.start, current->label);
+        Token g = { T_IDENT, "__check", 7, 0, NULL };
+        emitByte(OP_GET_GLOBAL); emitShort(identifierConstant(&g));
+        emitBytes(OP_GET_LOCAL, (uint8_t)(current->localCount - 1));
+        emitConstant(OBJ_VAL(newString(paramSpec, (int)strlen(paramSpec))));
+        emitConstant(OBJ_VAL(newString(what, (int)strlen(what))));
+        emitBytes(OP_CALL, 3);
+        emitByte(OP_POP);
+      }
     } while (match(T_COMMA));
   }
   consume(T_RPAREN, "Expected ')' after parameters.");
-  skipSemis();
-  consume(T_LBRACE, "Expected '{' before function body.");
-  block();
+  if (match(T_RARROW)) typeSpec(current->retSpec, sizeof current->retSpec);
+  if (match(T_ARROW)) {
+    /* fn(x) => expression   is short for   fn(x) { return expression } */
+    if (type == TYPE_INITIALIZER) error("Can't return a value from init().");
+    expression();
+    if (current->retSpec[0]) { char what[128]; snprintf(what, sizeof what, "return value of %s", current->label); emitCheckTop(current->retSpec, what); }
+    emitByte(OP_RETURN);
+  } else {
+    skipSemis();
+    consume(T_LBRACE, "Expected '{' before function body.");
+    block();
+  }
   ObjFunction* f = endCompiler();
   emitByte(OP_CLOSURE);
   emitShort(makeConstant(OBJ_VAL(f)));
@@ -956,9 +1030,13 @@ static void scopedBlock(void) {
 
 static void letDeclaration(void) {
   int global = parseVariable("Expected a variable name after 'let'.");
+  Token varName = parser.previous;
+  char spec[96]; spec[0] = '\0';
+  if (match(T_COLON)) typeSpec(spec, sizeof spec);
   if (match(T_EQ)) {
     if (check(T_FN)) markInitialized(); /* lets local functions call themselves */
     expression();
+    if (spec[0]) { char what[96]; snprintf(what, sizeof what, "variable '%.*s'", varName.length > 60 ? 60 : varName.length, varName.start); emitCheckTop(spec, what); }
   } else emitByte(OP_NIL);
   endStatement();
   defineVariable(global);
@@ -1144,6 +1222,7 @@ static void returnStatement(void) {
   else {
     if (current->type == TYPE_INITIALIZER) error("Can't return a value from init().");
     expression();
+    if (current->retSpec[0]) { char what[128]; snprintf(what, sizeof what, "return value of %s", current->label); emitCheckTop(current->retSpec, what); }
     emitByte(OP_RETURN);
   }
   endStatement();
