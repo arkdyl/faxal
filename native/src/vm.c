@@ -112,6 +112,7 @@ const MethodDef* findMethod(Value r, ObjString* name) {
   else if (IS_LIST(r)) t = listMethods;
   else if (IS_MAP(r)) t = mapMethods;
   else if (IS_RANGE(r)) t = rangeMethods;
+  else if (IS_COROUTINE(r)) t = coroutineMethods;
   if (!t) return NULL;
   for (; t->name; t++) if (strcmp(t->name, name->chars) == 0) return t;
   return NULL;
@@ -121,6 +122,10 @@ void vmInit(void) {
   memset(&vm, 0, sizeof vm);
   vm.stack = malloc(sizeof(Value) * (STACK_MAX + STACK_SLACK)); /* slack: room for huge list literals */
   vm.stackTop = vm.stack;
+  vm.stackEnd = vm.stack + STACK_MAX;
+  vm.frames = malloc(sizeof(CallFrame) * FRAMES_MAX); vm.frameMax = FRAMES_MAX;
+  vm.handlers = malloc(sizeof(Handler) * HANDLERS_MAX); vm.handlerMax = HANDLERS_MAX;
+  vm.yieldValue = NIL_VAL;
   vm.nextGC = 1024 * 1024;
   vm.thrown = NIL_VAL;
   vm.fxCompile = NIL_VAL;
@@ -136,7 +141,7 @@ void vmFree(void) {
   mapFree(&vm.modules);
   vm.mainModule = NULL;
   freeObjects();
-  free(vm.stack);
+  free(vm.stack); free(vm.frames); free(vm.handlers);
   bufFree(&vm.out);
   free(vm.traceback);
   free(vm.turtle.color); free(vm.turtle.background);
@@ -202,7 +207,11 @@ static bool callClosure(ObjClosure* c, int argc) {
     if (fn->minArity == fn->arity) return throwError("%s() takes %d argument%s but got %d", name, fn->arity, fn->arity == 1 ? "" : "s", argc);
     return throwError("%s() takes %d to %d arguments but got %d", name, fn->minArity, fn->arity, argc);
   }
-  if (vm.frameCount == FRAMES_MAX || vm.stackTop + 300 > vm.stack + STACK_MAX) return throwError("Stack overflow (too much recursion)");
+  /* a coroutine's stack has no spare room beyond its end, so a function must fit whole: it can't push more values
+     than it has bytes of code. (The main stack keeps a large slack instead.) */
+  int need = 300;
+  if (vm.currentCo && fn->chunk.count > need) need = fn->chunk.count;
+  if (vm.frameCount == vm.frameMax || vm.stackTop + need > vm.stackEnd) return throwError("Stack overflow (too much recursion)");
   CallFrame* f = &vm.frames[vm.frameCount++];
   f->closure = c;
   f->ip = c->function->chunk.code;
@@ -273,6 +282,212 @@ bool vmCall(Value fn, int argc, Value* argv, Value* out) {
   if (!ok) return false;
   *out = pop();
   return true;
+}
+
+/* --------------------------------------------------------------- coroutines
+ * A coroutine is a function with a stack of its own. resume() swaps that stack in, runs until the function
+ * yields or finishes, and swaps the caller's stack back. yield() returns false without an error and sets
+ * vm.yielded; the run loop sees the flag and returns, leaving the coroutine's frames exactly as they are.
+ * Inside a coroutine the C stack is the resumer's, so a yield must come from Faxal code directly, not from
+ * inside a callback of a native (map, sort, to_str): nativeDepth tells the two apart. */
+
+#define CO_STACK 16384
+#define CO_FRAMES 256
+#define CO_HANDLERS 64
+
+static void saveContext(Context* c) {
+  c->stack = vm.stack; c->stackTop = vm.stackTop; c->stackEnd = vm.stackEnd;
+  c->frames = vm.frames; c->frameCount = vm.frameCount; c->frameMax = vm.frameMax;
+  c->handlers = vm.handlers; c->handlerCount = vm.handlerCount; c->handlerMax = vm.handlerMax;
+  c->openUpvalues = vm.openUpvalues;
+}
+
+static void loadContext(const Context* c) {
+  vm.stack = c->stack; vm.stackTop = c->stackTop; vm.stackEnd = c->stackEnd;
+  vm.frames = c->frames; vm.frameCount = c->frameCount; vm.frameMax = c->frameMax;
+  vm.handlers = c->handlers; vm.handlerCount = c->handlerCount; vm.handlerMax = c->handlerMax;
+  vm.openUpvalues = c->openUpvalues;
+}
+
+const char* coroutineStatus(ObjCoroutine* co) {
+  switch (co->state) {
+    case CO_NEW: return "new";
+    case CO_SUSPENDED: return "suspended";
+    case CO_RUNNING: return "running";
+    case CO_DONE: return "done";
+    default: return "failed";
+  }
+}
+
+static void freeCoroutineStack(ObjCoroutine* co) {
+  Context* c = &co->ctx;
+  reallocate(c->stack, sizeof(Value) * CO_STACK, 0);
+  reallocate(c->frames, sizeof(CallFrame) * CO_FRAMES, 0);
+  reallocate(c->handlers, sizeof(Handler) * CO_HANDLERS, 0);
+  memset(c, 0, sizeof *c);
+}
+
+/* Runs the coroutine until it yields (*out = the yielded value), returns (*out = the result; state becomes
+   done) or fails (false, with the error in vm.thrown). `inject` throws `sent` inside it instead of delivering
+   it as the result of yield(). */
+bool coroutineResume(ObjCoroutine* co, Value sent, bool inject, Value* out) {
+  if (co->state == CO_RUNNING) return throwError("That coroutine is already running");
+  if (co->state == CO_DONE || co->state == CO_FAILED) return throwError("Can't resume a coroutine that has already %s", co->state == CO_DONE ? "finished" : "failed");
+  if (vm.nativeDepth >= MAX_NATIVE_DEPTH) return throwError("Stack overflow (too much recursion)");
+  if (inject && co->state == CO_NEW) { co->state = CO_FAILED; vm.thrown = sent; return false; }   /* never started: nothing to unwind */
+
+  bool fresh = co->state == CO_NEW;
+  if (fresh) {
+    Context* c = &co->ctx;
+    c->stack = reallocate(NULL, 0, sizeof(Value) * CO_STACK);
+    c->frames = reallocate(NULL, 0, sizeof(CallFrame) * CO_FRAMES);
+    c->handlers = reallocate(NULL, 0, sizeof(Handler) * CO_HANDLERS);
+    c->stackTop = c->stack; c->stackEnd = c->stack + CO_STACK;
+    c->frameCount = 0; c->frameMax = CO_FRAMES;
+    c->handlerCount = 0; c->handlerMax = CO_HANDLERS;
+    c->openUpvalues = NULL;
+  }
+
+  saveContext(&co->host);
+  co->resumer = vm.currentCo;
+  vm.currentCo = co;
+  loadContext(&co->ctx);
+  co->state = CO_RUNNING;
+  vm.nativeDepth++;
+  co->depth = vm.nativeDepth;
+
+  bool ok;
+  if (fresh) {
+    int argc = 0;
+    push(co->fn);
+    ObjClosure* entry = IS_CLOSURE(co->fn) ? AS_CLOSURE(co->fn) : IS_BOUND(co->fn) ? AS_BOUND(co->fn)->method : NULL;
+    if (entry && entry->function->arity >= 1) { push(sent); argc = 1; }   /* the first resume(co, x) passes x to the function */
+    ok = callValue(co->fn, argc);
+    if (ok && vm.frameCount > 0) ok = run(0);
+  } else if (!inject) {
+    vm.stackTop -= co->yieldArgc + 1;   /* the pending yield(...) call: its result is what resume() sent */
+    push(sent);
+    ok = run(0);
+  } else {
+    /* throw `sent` at the place where the coroutine is suspended: unwind to its innermost try block */
+    vm.thrown = sent;
+    if (vm.handlerCount > 0) {
+      Handler h = vm.handlers[--vm.handlerCount];
+      closeUpvalues(h.sp);
+      vm.frameCount = h.frame;
+      vm.stackTop = h.sp;
+      push(vm.thrown);
+      vm.frames[vm.frameCount - 1].ip = h.catchIp;
+      ok = run(0);
+    } else {
+      free(vm.traceback); vm.traceback = NULL;
+      ok = false;
+    }
+  }
+
+  bool yielded = ok && vm.yielded;
+  vm.nativeDepth--;
+  Value result = NIL_VAL;
+  if (yielded) {
+    vm.yielded = false;
+    result = vm.yieldValue;
+    vm.yieldValue = NIL_VAL;
+    saveContext(&co->ctx);
+    co->state = CO_SUSPENDED;
+  } else if (ok) {
+    result = vm.stackTop[-1];
+    closeUpvalues(vm.stack);
+    co->state = CO_DONE;
+  } else {
+    vm.yielded = false;
+    closeUpvalues(vm.stack);
+    co->state = CO_FAILED;
+  }
+  loadContext(&co->host);
+  vm.currentCo = co->resumer;
+  co->resumer = NULL;
+  if (!yielded) freeCoroutineStack(co);
+  if (!ok) {
+    if (!vm.fatal && vm.handlerCount > 0) { free(vm.traceback); vm.traceback = NULL; }   /* the resumer will catch it: no stale trace */
+    return false;
+  }
+  *out = result;
+  return true;
+}
+
+static bool yieldTo(int argc, Value* args, const char* what) {
+  if (!vm.currentCo) return throwError("%s", what);
+  if (vm.nativeDepth != vm.currentCo->depth) return throwError("Can't yield from inside a callback of map, sort, to_str or similar: yield from the coroutine's own code");
+  vm.yielded = true;
+  vm.yieldValue = argc > 0 ? args[0] : NIL_VAL;
+  vm.currentCo->yieldArgc = argc;
+  return false;   /* "false" here means: leave the run loop now (see handle_throw) */
+}
+
+#define CO_NATIVE(name) static bool name(int argc, Value* args, Value* out)
+CO_NATIVE(co_yield) { (void)out; return yieldTo(argc, args, "yield can only be used inside a coroutine or an async function"); }
+CO_NATIVE(co_await) { (void)out; return yieldTo(argc, args, "await can only be used inside an async function (or run it with async.run)"); }
+CO_NATIVE(co_create) {
+  (void)argc;
+  if (!IS_CLOSURE(args[0]) && !IS_BOUND(args[0]) && !IS_CLASS(args[0])) return throwError("coroutine() expects a function written in Faxal, got %s", IS_NATIVE(args[0]) ? "a built-in function" : typeName(args[0]));
+  *out = OBJ_VAL(newCoroutine(args[0]));
+  return true;
+}
+static bool needCoroutine(const char* fn, Value v) {
+  if (!IS_COROUTINE(v)) return throwError("%s() expects a coroutine, got %s", fn, typeName(v));
+  return true;
+}
+CO_NATIVE(co_resume) {
+  if (!needCoroutine("resume", args[0])) return false;
+  return coroutineResume(AS_COROUTINE(args[0]), argc > 1 ? args[1] : NIL_VAL, false, out);
+}
+CO_NATIVE(co_resume_error) {
+  (void)argc;
+  if (!needCoroutine("resume_error", args[0])) return false;
+  return coroutineResume(AS_COROUTINE(args[0]), args[1], true, out);
+}
+CO_NATIVE(co_status) {
+  (void)argc;
+  if (!needCoroutine("status", args[0])) return false;
+  *out = OBJ_VAL(cstring(coroutineStatus(AS_COROUTINE(args[0]))));
+  return true;
+}
+CO_NATIVE(co_is_done) {
+  (void)argc;
+  if (!needCoroutine("is_done", args[0])) return false;
+  CoState s = AS_COROUTINE(args[0])->state;
+  *out = BOOL_VAL(s == CO_DONE || s == CO_FAILED);
+  return true;
+}
+CO_NATIVE(co_to_list) {
+  (void)argc;
+  if (!needCoroutine("to_list", args[0])) return false;
+  ObjCoroutine* co = AS_COROUTINE(args[0]);
+  ObjList* l = newList();
+  push(OBJ_VAL(l));
+  while (co->state != CO_DONE) {
+    Value r;
+    if (!coroutineResume(co, NIL_VAL, false, &r)) { pop(); return false; }
+    if (co->state != CO_DONE) listPush(l, r);
+  }
+  pop();
+  *out = OBJ_VAL(l);
+  return true;
+}
+
+const MethodDef coroutineMethods[] = {
+  {"resume", co_resume, 0, 1}, {"status", co_status, 0, 0}, {"is_done", co_is_done, 0, 0}, {"to_list", co_to_list, 0, 0},
+  {NULL, NULL, 0, 0}
+};
+
+void registerCoroutineBuiltins(Map* g) {
+  defineNative(g, "coroutine", co_create, 1, 1);
+  defineNative(g, "__coroutine", co_create, 1, 1);   /* what `async fn` compiles to */
+  defineNative(g, "yield", co_yield, 0, 1);
+  defineNative(g, "__await", co_await, 1, 1);        /* what `await x` compiles to */
+  defineNative(g, "resume", co_resume, 1, 2);
+  defineNative(g, "resume_error", co_resume_error, 2, 2);
+  defineNative(g, "status", co_status, 1, 1);
 }
 
 /* ---------------------------------------------------------------- operators */
@@ -910,14 +1125,19 @@ static bool run(int base) {
         } else if (IS_RANGE(iter)) {
           ObjRange* r = AS_RANGE(iter);
           if (i < rangeLength(r)) { item = NUM_VAL(r->start + i * r->step); frame->slots[slot + 1] = NUM_VAL(i + 1); has = true; }
-        } else THROW("Can't loop over %s (use a list, string, map or range)", typeName(iter));
+        } else if (IS_COROUTINE(iter)) {
+          Value r;
+          FAIL_IF(coroutineResume(AS_COROUTINE(iter), NIL_VAL, false, &r));
+          if (AS_COROUTINE(iter)->state == CO_DONE) frame->ip += off; else push(r);
+          break;
+        } else THROW("Can't loop over %s (use a list, string, map, range or coroutine)", typeName(iter));
         if (has) push(item); else frame->ip += off;
         break;
       }
 
       case OP_TRY: {
         uint16_t off = READ_SHORT();
-        if (vm.handlerCount == HANDLERS_MAX) THROW("Too many nested try blocks");
+        if (vm.handlerCount == vm.handlerMax) THROW("Too many nested try blocks");
         Handler* h = &vm.handlers[vm.handlerCount++];
         h->frame = vm.frameCount; h->sp = vm.stackTop; h->catchIp = frame->ip + off;
         break;
@@ -999,6 +1219,7 @@ static bool run(int base) {
     continue;
 
   handle_throw:
+    if (vm.yielded) return true;   /* not an error: yield() leaves the coroutine's frames as they are and returns to resume() */
     if ((vm.handlerCount == 0 || vm.fatal) && !vm.traceback) captureTraceback();
     if (!vm.fatal && vm.handlerCount > 0 && vm.handlers[vm.handlerCount - 1].frame > base) {
       Handler h = vm.handlers[--vm.handlerCount];

@@ -74,16 +74,22 @@ let BUILTINS = {
   reversed: "reversed(list)  A reversed copy of the list.",
   zip: "zip(a, b)  Pair up two lists: [[a0, b0], [a1, b1], ...].",
   enumerate: "enumerate(list)  Pairs of [index, item].",
+  coroutine: "coroutine(fn)  A function that can pause itself with yield(). Nothing runs until resume().",
+  resume: "resume(co, value)  Run the coroutine until it yields or finishes; value becomes the result of its yield().",
+  yield: "yield(value)  Pause the running coroutine and give value to whoever resumed it.",
+  resume_error: "resume_error(co, error)  Throw an error inside a paused coroutine, at its yield().",
+  status: "status(co)  \"new\", \"suspended\", \"running\", \"done\" or \"failed\".",
 }
 
 let METHODS = {
   string: ["len", "size", "upper", "lower", "trim", "lstrip", "rstrip", "contains", "starts_with", "ends_with", "find", "count", "replace", "split", "chars", "lines", "repeat", "reverse", "pad_left", "pad_right", "center", "capitalize", "is_digit", "is_alpha", "is_empty"],
   list: ["len", "push", "pop", "insert", "remove", "clear", "contains", "index_of", "join", "reverse", "sort", "slice", "copy", "map", "filter", "each", "reduce", "first", "last", "is_empty", "sum", "min", "max", "any", "all", "find", "count", "extend", "unique", "flatten", "sorted", "reversed"],
+  coroutine: ["resume", "status", "is_done", "to_list"],
   map: ["len", "keys", "values", "items", "has", "get", "remove", "clear", "copy", "is_empty", "merge"],
 }
 
 let MODULES = ["math", "json", "time", "os", "fs"]
-let STD_MODULES = ["std/test", "std/collections", "std/iter", "std/text", "std/numbers", "std/color", "std/regex", "std/datetime", "std/path", "std/csv", "std/random", "std/lex", "std/fmt", "std/bytecode", "std/compiler"]
+let STD_MODULES = ["std/tasks", "std/test", "std/collections", "std/iter", "std/text", "std/numbers", "std/color", "std/regex", "std/datetime", "std/path", "std/csv", "std/random", "std/lex", "std/fmt", "std/bytecode", "std/compiler"]
 
 # ---------------------------------------------------------------- the source
 
@@ -196,7 +202,7 @@ fn completion(uri, position) {
 
   if w.before == "." {
     # after a dot: methods (we don't know the type, so offer the ones of every type)
-    for group in ["string", "list", "map"] {
+    for group in ["string", "list", "map", "coroutine"] {
       for m in METHODS[group] { add(m, 2, group + " method") }
     }
     return items

@@ -70,6 +70,7 @@ Both build faxal from `native/dist/faxal.c`, the whole runtime as a single C fil
 - numbers, strings (UTF-8, `f"..."` interpolation), booleans, `nil`, lists, ordered maps, ranges (`0..10 by 2`)
 - functions as values, closures, recursion, default parameters, short arrow functions `fn(x) => x * 2`
 - optional types that are checked at run time: `fn area(w: num, h: num) -> num`
+- coroutines and generators (`yield`, `resume`, `for x in coroutine(...)`), and `async fn` / `await` with a task scheduler in `std/tasks` (sleep, gather, timeout, channels)
 - classes with `init`, `self`, `extends`, `super`, and `to_str` for printing
 - `if` / `while` / `for … in`, `break`, `continue`; `try` / `catch` / `throw` with stack traces
 - pipes `x |> f(a)`, default values `a ?? b`, safe access `a?.b`
@@ -149,7 +150,6 @@ make -C native embed        # recompile lib/ into src/embedded.c after editing i
 - caching: compile imported modules to `.fxc` once and reuse them
 - compressing or stripping bytecode (line tables, names) for smaller executables
 - making the Faxal compiler fast enough to be the default (a cheaper token representation would help)
-- coroutines / generators (`yield`) and `async`: the VM runs one stack today
 - go to definition and rename in the language server
 - an HTTP client and server in the standard library
 - machine-code generation (the bytecode VM is still what runs a "native" program)

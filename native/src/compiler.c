@@ -21,7 +21,7 @@ typedef enum {
   T_AND, T_OR, T_NOT, T_BREAK, T_CONTINUE, T_ELSE, T_FALSE, T_FN, T_FOR, T_IF,
   T_IMPORT, T_IN, T_LET, T_NIL, T_RETURN, T_TRUE, T_WHILE, T_TRY, T_CATCH, T_THROW,
   T_CLASS, T_EXTENDS, T_SELF, T_SUPER, T_BY,
-  T_PIPE, T_QQ, T_QDOT, T_ARROW, T_RARROW,
+  T_PIPE, T_QQ, T_QDOT, T_ARROW, T_RARROW, T_ASYNC, T_AWAIT,
   T_ERROR, T_EOF
 } TokenType;
 
@@ -94,7 +94,7 @@ static bool newlinesSignificant(void) {
 
 static TokenType keywordType(const char* s, int n) {
   static const struct { const char* w; TokenType t; } kw[] = {
-    {"and", T_AND}, {"break", T_BREAK}, {"catch", T_CATCH}, {"by", T_BY}, {"class", T_CLASS}, {"extends", T_EXTENDS}, {"self", T_SELF}, {"super", T_SUPER}, {"continue", T_CONTINUE}, {"else", T_ELSE},
+    {"and", T_AND}, {"async", T_ASYNC}, {"await", T_AWAIT}, {"break", T_BREAK}, {"catch", T_CATCH}, {"by", T_BY}, {"class", T_CLASS}, {"extends", T_EXTENDS}, {"self", T_SELF}, {"super", T_SUPER}, {"continue", T_CONTINUE}, {"else", T_ELSE},
     {"false", T_FALSE}, {"fn", T_FN}, {"for", T_FOR}, {"if", T_IF}, {"import", T_IMPORT}, {"in", T_IN},
     {"let", T_LET}, {"nil", T_NIL}, {"not", T_NOT}, {"or", T_OR}, {"return", T_RETURN}, {"throw", T_THROW},
     {"true", T_TRUE}, {"try", T_TRY}, {"while", T_WHILE},
@@ -845,7 +845,7 @@ static bool typeSpec(char* out, size_t cap) {
   return true;
 }
 
-static void function(FunctionType type, Token* name) {
+static void function(FunctionType type, Token* name, bool isAsync) {
   Compiler c;
   initCompiler(&c, type);
   if (name) {
@@ -894,6 +894,20 @@ static void function(FunctionType type, Token* name) {
   }
   consume(T_RPAREN, "Expected ')' after parameters.");
   if (match(T_RARROW)) typeSpec(current->retSpec, sizeof current->retSpec);
+  /* async fn f(x) { body }  is   fn f(x) { return __coroutine(fn() { body }) }: calling it gives a coroutine
+     that has not started yet (the body can use the parameters because it is a closure) */
+  Compiler inner;
+  if (isAsync) {
+    if (type == TYPE_INITIALIZER) error("An init() method can't be async.");
+    Token g = { T_IDENT, "__coroutine", 11, 0, NULL };
+    emitByte(OP_GET_GLOBAL); emitShort(identifierConstant(&g));
+    initCompiler(&inner, TYPE_FUNCTION);
+    memcpy(inner.label, c.label, sizeof inner.label);
+    memcpy(inner.retSpec, c.retSpec, sizeof inner.retSpec);
+    c.retSpec[0] = '\0';
+    if (name) inner.function->name = newString(name->start, name->length);
+    beginScope();
+  }
   if (match(T_ARROW)) {
     /* fn(x) => expression   is short for   fn(x) { return expression } */
     if (type == TYPE_INITIALIZER) error("Can't return a value from init().");
@@ -905,13 +919,38 @@ static void function(FunctionType type, Token* name) {
     consume(T_LBRACE, "Expected '{' before function body.");
     block();
   }
+  if (isAsync) {
+    ObjFunction* body = endCompiler();
+    emitByte(OP_CLOSURE);
+    emitShort(makeConstant(OBJ_VAL(body)));
+    for (int i = 0; i < body->upvalueCount; i++) { emitByte(inner.upvalues[i].isLocal ? 1 : 0); emitByte(inner.upvalues[i].index); }
+    emitBytes(OP_CALL, 1);
+    emitByte(OP_RETURN);
+  }
   ObjFunction* f = endCompiler();
   emitByte(OP_CLOSURE);
   emitShort(makeConstant(OBJ_VAL(f)));
   for (int i = 0; i < f->upvalueCount; i++) { emitByte(c.upvalues[i].isLocal ? 1 : 0); emitByte(c.upvalues[i].index); }
 }
 
-static void lambda(bool canAssign) { (void)canAssign; function(TYPE_FUNCTION, NULL); }
+static void lambda(bool canAssign) { (void)canAssign; function(TYPE_FUNCTION, NULL, false); }
+
+/* async fn(x) { ... } as an expression */
+static void asyncLambda(bool canAssign) {
+  (void)canAssign;
+  consume(T_FN, "Expected 'fn' after 'async'.");
+  function(TYPE_FUNCTION, NULL, true);
+}
+
+/* await x  becomes  __await(x): inside an async function the coroutine suspends until x is ready */
+static void awaitExpr(bool canAssign) {
+  (void)canAssign;
+  parsePrecedence(PREC_UNARY);
+  Token g = { T_IDENT, "__await", 7, 0, NULL };
+  emitByte(OP_GET_GLOBAL); emitShort(identifierConstant(&g));
+  emitByte(OP_SWAP);
+  emitBytes(OP_CALL, 1);
+}
 
 /* x |> f        becomes  f(x)
    x |> f(a, b)  becomes  f(x, a, b)      (x is passed first) */
@@ -1001,7 +1040,7 @@ static ParseRule rules[T_EOF + 1] = {
   [T_NUMBER] = {number, NULL, PREC_NONE},
   [T_AND] = {NULL, and_, PREC_AND}, [T_OR] = {NULL, or_, PREC_OR}, [T_NOT] = {unary, NULL, PREC_NONE},
   [T_FALSE] = {literal, NULL, PREC_NONE}, [T_TRUE] = {literal, NULL, PREC_NONE}, [T_NIL] = {literal, NULL, PREC_NONE},
-  [T_FN] = {lambda, NULL, PREC_NONE}, [T_SELF] = {self_, NULL, PREC_NONE},
+  [T_FN] = {lambda, NULL, PREC_NONE}, [T_ASYNC] = {asyncLambda, NULL, PREC_NONE}, [T_AWAIT] = {awaitExpr, NULL, PREC_NONE}, [T_SELF] = {self_, NULL, PREC_NONE},
   [T_PIPE] = {NULL, pipeOp, PREC_PIPE}, [T_QQ] = {NULL, coalesce, PREC_COALESCE}, [T_QDOT] = {NULL, optionalDot, PREC_CALL}, [T_BY] = {NULL, binary, PREC_RANGE}, [T_SUPER] = {super_, NULL, PREC_NONE},
 };
 
@@ -1042,22 +1081,23 @@ static void letDeclaration(void) {
   defineVariable(global);
 }
 
-static void funDeclaration(void) {
+static void funDeclaration(bool isAsync) {
   int global = parseVariable("Expected a function name.");
   Token name = parser.previous;
   markInitialized();
-  function(TYPE_FUNCTION, &name);
+  function(TYPE_FUNCTION, &name, isAsync);
   defineVariable(global);
 }
 
 static void method(void) {
   skipSemis();
+  bool isAsync = match(T_ASYNC);
   consume(T_FN, "Expected 'fn' to start a method.");
   consume(T_IDENT, "Expected a method name.");
   Token name = parser.previous;
   int constant = identifierConstant(&name);
   FunctionType type = (name.length == 4 && memcmp(name.start, "init", 4) == 0) ? TYPE_INITIALIZER : TYPE_METHOD;
-  function(type, &name);
+  function(type, &name, isAsync);
   emitByte(OP_METHOD);
   emitShort(constant);
 }
@@ -1275,7 +1315,11 @@ static void declaration(void) {
   if (++nesting > 200) { error("Blocks are nested too deeply."); nesting--; if (!check(T_EOF)) advance(); synchronize(); return; }
   if (match(T_LET)) letDeclaration();
   else if (match(T_CLASS)) classDeclaration();
-  else if (check(T_FN) && peekNext().type == T_IDENT) { advance(); funDeclaration(); }
+  else if (check(T_FN) && peekNext().type == T_IDENT) { advance(); funDeclaration(false); }
+  else if (match(T_ASYNC)) {
+    if (!match(T_FN)) errorAtCurrent("Expected 'fn' after 'async'.");
+    else funDeclaration(true);
+  }
   else if (match(T_IMPORT)) importStatement();
   else statement();
   nesting--;

@@ -85,7 +85,8 @@
       "patterns": [
         { "name": "keyword.control.faxal", "match": "\\b(if|else|while|for|in|break|continue|return|try|catch|throw|import|by)\\b" },
         { "name": "storage.type.faxal", "match": "\\b(let|fn|class)\\b" },
-        { "name": "storage.modifier.faxal", "match": "\\b(extends)\\b" },
+        { "name": "storage.modifier.faxal", "match": "\\b(extends|async)\\b" },
+        { "name": "keyword.control.await.faxal", "match": "\\b(await)\\b" },
         { "name": "keyword.operator.word.faxal", "match": "\\b(and|or|not)\\b" }
       ]
     },

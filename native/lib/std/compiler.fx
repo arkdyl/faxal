@@ -816,7 +816,7 @@ fn type_spec() {
 }
 
 # A function or method: parameters (with optional types and defaults) and a body.
-fn function(type, name) {
+fn function(type, name, is_async = false) {
   begin_function(type, name)
   begin_scope()
   consume("(", "Expected '(' before parameters.")
@@ -862,6 +862,20 @@ fn function(type, name) {
   }
   consume(")", "Expected ')' after parameters.")
   if match("->") { cur.ret_spec = type_spec() }
+  # async fn f(x) { body } is fn f(x) { return __coroutine(fn() { body }) }: calling it gives a coroutine
+  # that has not started yet (the body can use the parameters because it is a closure)
+  let outer = nil
+  if is_async {
+    if cur.type == "initializer" { error("An init() method can't be async.") }
+    emit_byte(OP.GET_GLOBAL)
+    emit_short(identifier_constant("__coroutine"))
+    outer = cur
+    begin_function("function", name)
+    cur.label = outer.label
+    cur.ret_spec = outer.ret_spec
+    outer.ret_spec = ""
+    begin_scope()
+  }
   if match("=>") {
     if cur.type == "initializer" { error("Can't return a value from init().") }
     expression()
@@ -871,6 +885,17 @@ fn function(type, name) {
     skip_semis()
     consume("{", "Expected '{' before function body.")
     block()
+  }
+  if is_async {
+    let body = end_compiler()
+    emit_byte(OP.CLOSURE)
+    emit_short(make_constant(body))
+    for up in body.upvalues {
+      emit_byte(up.is_local and 1 or 0)
+      emit_byte(up.index)
+    }
+    emit_bytes(OP.CALL, 1)
+    emit_byte(OP.RETURN)
   }
   let f = end_compiler()
   emit_byte(OP.CLOSURE)
@@ -882,6 +907,21 @@ fn function(type, name) {
 }
 
 fn lambda(can_assign) { function("function", nil) }
+
+# async fn(x) { ... } as an expression
+fn async_lambda(can_assign) {
+  consume("fn", "Expected 'fn' after 'async'.")
+  function("function", nil, true)
+}
+
+# await x becomes __await(x): inside an async function the coroutine suspends until x is ready
+fn await_expr(can_assign) {
+  parse_precedence(PREC_UNARY)
+  emit_byte(OP.GET_GLOBAL)
+  emit_short(identifier_constant("__await"))
+  emit_byte(OP.SWAP)
+  emit_bytes(OP.CALL, 1)
+}
 
 # x |> f becomes f(x), and x |> f(a, b) becomes f(x, a, b)
 fn pipe_op(can_assign) {
@@ -994,21 +1034,22 @@ fn let_declaration() {
   define_variable(global)
 }
 
-fn fun_declaration() {
+fn fun_declaration(is_async = false) {
   let global = parse_variable("Expected a function name.")
   let name = ps.previous.text
   mark_initialized()
-  function("function", name)
+  function("function", name, is_async)
   define_variable(global)
 }
 
 fn method() {
   skip_semis()
+  let is_async = match("async")
   consume("fn", "Expected 'fn' to start a method.")
   consume("IDENT", "Expected a method name.")
   let name = ps.previous.text
   let constant = identifier_constant(name)
-  function(name == "init" and "initializer" or "method", name)
+  function(name == "init" and "initializer" or "method", name, is_async)
   emit_byte(OP.METHOD)
   emit_short(constant)
 }
@@ -1258,6 +1299,9 @@ fn declaration() {
     advance()
     fun_declaration()
   }
+  else if match("async") {
+    if not match("fn") { error_at_current("Expected 'fn' after 'async'.") } else { fun_declaration(true) }
+  }
   else if match("import") { import_statement() }
   else { statement() }
   ps.nesting -= 1
@@ -1321,6 +1365,8 @@ let RULES = {
   "true": [literal, nil, PREC_NONE],
   "nil": [literal, nil, PREC_NONE],
   "fn": [lambda, nil, PREC_NONE],
+  "async": [async_lambda, nil, PREC_NONE],
+  "await": [await_expr, nil, PREC_NONE],
   "self": [self_, nil, PREC_NONE],
   "super": [super_, nil, PREC_NONE],
   "|>": [nil, pipe_op, PREC_PIPE],

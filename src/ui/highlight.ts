@@ -1,6 +1,6 @@
 const KEYWORDS = new Set([
   "let", "fn", "if", "else", "while", "for", "in", "break", "continue", "return",
-  "true", "false", "nil", "and", "or", "not", "try", "catch", "throw", "import", "class", "extends", "self", "super", "by",
+  "true", "false", "nil", "and", "or", "not", "try", "catch", "throw", "import", "class", "extends", "self", "super", "by", "async", "await",
 ]);
 const BUILTINS = new Set([
   "print", "write", "isinstance", "input", "len", "str", "repr", "num", "int", "type", "range", "assert", "ord", "chr",

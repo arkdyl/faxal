@@ -1431,6 +1431,7 @@ void registerBuiltins(void) {
   defineNative(g, "reversed", l_reversed, 1, 1);
   defineNative(g, "zip", g_zip, 2, 2);
   defineNative(g, "enumerate", g_enumerate, 1, 1);
+  registerCoroutineBuiltins(g);
   defineNative(g, "abs", m_abs, 1, 1);
   defineNative(g, "floor", m_floor, 1, 1);
   defineNative(g, "ceil", m_ceil, 1, 1);

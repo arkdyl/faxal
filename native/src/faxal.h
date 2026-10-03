@@ -31,6 +31,7 @@ typedef struct ObjModule ObjModule;
 typedef struct ObjClass ObjClass;
 typedef struct ObjInstance ObjInstance;
 typedef struct ObjBoundMethod ObjBoundMethod;
+typedef struct ObjCoroutine ObjCoroutine;
 
 typedef enum { VAL_NIL, VAL_BOOL, VAL_NUM, VAL_OBJ } ValueType;
 
@@ -54,7 +55,8 @@ typedef struct {
 
 typedef enum {
   OBJ_STRING, OBJ_FUNCTION, OBJ_CLOSURE, OBJ_UPVALUE, OBJ_NATIVE,
-  OBJ_LIST, OBJ_MAP, OBJ_RANGE, OBJ_MODULE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD
+  OBJ_LIST, OBJ_MAP, OBJ_RANGE, OBJ_MODULE, OBJ_CLASS, OBJ_INSTANCE, OBJ_BOUND_METHOD,
+  OBJ_COROUTINE
 } ObjType;
 
 struct Obj { ObjType type; bool isMarked; struct Obj* next; };
@@ -72,6 +74,8 @@ struct Obj { ObjType type; bool isMarked; struct Obj* next; };
 #define IS_CLASS(v)     IS_OBJ_TYPE(v, OBJ_CLASS)
 #define IS_INSTANCE(v)  IS_OBJ_TYPE(v, OBJ_INSTANCE)
 #define IS_BOUND(v)     IS_OBJ_TYPE(v, OBJ_BOUND_METHOD)
+#define IS_COROUTINE(v) IS_OBJ_TYPE(v, OBJ_COROUTINE)
+#define AS_COROUTINE(v) ((ObjCoroutine*)AS_OBJ(v))
 #define IS_CALLABLE(v)  (IS_CLOSURE(v) || IS_NATIVE(v) || IS_CLASS(v) || IS_BOUND(v))
 
 #define AS_STRING(v)    ((ObjString*)AS_OBJ(v))
@@ -115,6 +119,29 @@ struct ObjBoundMethod { Obj obj; Value receiver; ObjClosure* method; };
 
 typedef struct { const char* name; NativeFn fn; int minArgs; int maxArgs; } MethodDef;
 
+/* One execution context: a value stack, call frames, try handlers and the open upvalues that point into the
+   stack. The main program has one; every coroutine has its own, and the VM swaps them in and out. */
+typedef struct CallFrame CallFrame;
+typedef struct Handler Handler;
+typedef struct {
+  Value* stack; Value* stackTop; Value* stackEnd;
+  CallFrame* frames; int frameCount, frameMax;
+  Handler* handlers; int handlerCount, handlerMax;
+  ObjUpvalue* openUpvalues;
+} Context;
+
+typedef enum { CO_NEW, CO_SUSPENDED, CO_RUNNING, CO_DONE, CO_FAILED } CoState;
+struct ObjCoroutine {
+  Obj obj;
+  Value fn;                 /* what runs inside the coroutine */
+  CoState state;
+  Context ctx;              /* its own stack and frames while it is not running */
+  Context host;             /* the stack of whoever resumed it, while it is running */
+  ObjCoroutine* resumer;    /* ... and that resumer, if it is a coroutine too */
+  int depth;                /* vm.nativeDepth while it runs: yield must happen at exactly this depth */
+  int yieldArgc;            /* how many arguments the pending yield() call has on the stack */
+};
+
 /* ---------------------------------------------------------------- bytecode */
 
 typedef enum {
@@ -140,8 +167,8 @@ typedef enum {
 
 typedef struct { char* data; int len; int cap; } Buffer;
 
-typedef struct { ObjClosure* closure; uint8_t* ip; Value* slots; } CallFrame;
-typedef struct { int frame; Value* sp; uint8_t* catchIp; } Handler;
+struct CallFrame { ObjClosure* closure; uint8_t* ip; Value* slots; };
+struct Handler { int frame; Value* sp; uint8_t* catchIp; };
 
 typedef struct { double x1, y1, x2, y2; char* color; double width; } Segment;
 typedef struct { int kind; double x, y, a, b; char* color; double width; char* text; } Shape;
@@ -156,10 +183,12 @@ typedef struct { char* path; char* source; size_t length; bool isBytecode; } Bun
 typedef struct { const char* name; const unsigned char* data; size_t length; } EmbeddedFile;   /* a compiled Faxal module (.fxc bytes) built into the faxal binary itself */
 
 typedef struct {
-  Value* stack; Value* stackTop;
-  CallFrame frames[FRAMES_MAX]; int frameCount;
+  /* the running execution context (see Context): the main program's, or the current coroutine's */
+  Value* stack; Value* stackTop; Value* stackEnd;
+  CallFrame* frames; int frameCount, frameMax;
+  Handler* handlers; int handlerCount, handlerMax;
   ObjUpvalue* openUpvalues;
-  Handler handlers[HANDLERS_MAX]; int handlerCount;
+  ObjCoroutine* currentCo; bool yielded; Value yieldValue;
   Map builtins; Map modules; ObjModule* mainModule;
   ObjString** strings; int stringCap; int stringUsed;
   Obj* objects; size_t bytesAllocated; size_t nextGC;
@@ -218,6 +247,10 @@ ObjModule* newModule(ObjString* path);
 ObjClass* newClass(ObjString* name);
 ObjInstance* newInstance(ObjClass* klass);
 ObjBoundMethod* newBoundMethod(Value receiver, ObjClosure* method);
+ObjCoroutine* newCoroutine(Value fn);
+bool coroutineResume(ObjCoroutine* co, Value sent, bool inject, Value* out);
+const char* coroutineStatus(ObjCoroutine* co);
+extern const MethodDef coroutineMethods[];
 
 /* values */
 bool valuesEqual(Value a, Value b);
@@ -265,6 +298,7 @@ ObjModule* loadMainModule(const char* path);
 void defineNative(Map* m, const char* name, NativeFn fn, int minArgs, int maxArgs);
 void defineValue(Map* m, const char* name, Value v);
 const MethodDef* findMethod(Value receiver, ObjString* name);
+void registerCoroutineBuiltins(Map* g);
 
 /* embedded Faxal sources (generated into embedded.c by tools/embed.fx) */
 extern const EmbeddedFile embeddedFiles[];

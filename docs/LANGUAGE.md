@@ -391,6 +391,81 @@ error: string has no method 'uper'. Did you mean 'upper'?
 
 `return`, `break` and `continue` all work inside `try`.
 
+## Coroutines and async
+
+A **coroutine** is a function that can pause in the middle and be continued later, keeping all its variables. `yield(x)` pauses it and hands `x` to whoever started it; `resume(co)` continues it.
+
+```fx
+let countdown = coroutine(fn() {
+  for i in 3..0 by -1 { yield(i) }
+  return "liftoff"
+})
+print(resume(countdown), resume(countdown), resume(countdown))   # 3 2 1
+print(resume(countdown), countdown.status())                      # liftoff done
+```
+
+`resume(co, value)` sends a value back in: it becomes the result of the `yield` the coroutine was paused at (the first `resume` passes it to the function as its argument). A `for` loop can walk a coroutine, which makes generators easy, even endless ones:
+
+```fx
+fn naturals() {
+  let n = 1
+  while true { yield(n); n += 1 }
+}
+for n in coroutine(naturals) {
+  if n > 5 { break }
+  write(n, " ")                                  # 1 2 3 4 5
+}
+print()
+print(coroutine(fn() { yield("a"); yield("b") }).to_list())    # ["a", "b"]
+```
+
+| | |
+| --- | --- |
+| `coroutine(f)` | a new coroutine that will run `f` (nothing happens until the first `resume`) |
+| `resume(co)` `resume(co, x)` | run until the next `yield` (gives its value) or until `f` returns (gives the result) |
+| `yield(x)` `yield()` | pause the running coroutine |
+| `resume_error(co, e)` | throw `e` inside a paused coroutine, at its `yield` |
+| `co.status()` | `"new"` `"suspended"` `"running"` `"done"` or `"failed"` |
+| `co.is_done()` `co.to_list()` | finished? / run to the end and collect every yielded value |
+
+An error inside a coroutine comes out of the `resume` that was running it. You can only `yield` from the coroutine's own code, not from inside a callback that a built-in calls (`map`, `sort`, `to_str`). A coroutine has a stack of its own that holds about 250 nested calls.
+
+### async and await
+
+`async fn` makes a function that returns a coroutine instead of running. `await` pauses the current async function until something is ready, and meanwhile other tasks run. The scheduler lives in `std/tasks`:
+
+```fx
+import "std/tasks" as tasks
+
+async fn fetch(name, seconds) {
+  await tasks.sleep(seconds)            # other tasks run while this one waits
+  return name + " is ready"
+}
+
+async fn main() {
+  let a = tasks.spawn(fetch("a", 0.2))  # start two tasks right now ...
+  let b = tasks.spawn(fetch("b", 0.1))
+  print(await a, "|", await b)          # ... and wait for each result
+  print(await tasks.gather([fetch("c", 0.1), fetch("d", 0.1)]))
+  print(await fetch("e", 0.05))         # awaiting a call runs it and gives its result
+}
+tasks.run(main())                       # starts the scheduler and runs main to the end
+```
+
+Tasks never run at the same moment: they take turns, and switch only at an `await`, so there are no data races. What you can wait for:
+
+| `await ...` | gives |
+| --- | --- |
+| `fetch(...)` (a call of an `async fn`) | its result; an error inside is thrown here |
+| `tasks.spawn(call)` (a task) | the task's result |
+| `tasks.sleep(seconds)` | `nil`, after the time has passed |
+| `tasks.gather([a, b, c])` | the list of results, in order (the first error is thrown) |
+| `tasks.timeout(x, seconds)` | the result of `x`, or throws `"timed out after ..."` |
+| `channel.recv()` `channel.send(x)` | a value from / into a `tasks.Channel(capacity)` (`nil` from `recv` once it is closed and empty) |
+| `nil` | nothing: just lets the other tasks take a turn |
+
+`async fn` also works for methods (`async fn get() { ... }` inside a class) and as an expression (`async fn(x) => await other(x)`). `await` only works inside an async function (or a coroutine). `tasks.run` stops with an error if every task is waiting for something that can never happen ("deadlock"), and reports an error from a task that nobody awaited. In safe mode there is no real clock to wait on, so `sleep` moves a pretend clock forward: programs finish immediately and in the same order. `async` and `await` are reserved words, so they can't be names of variables or modules.
+
 ## Modules
 
 `import` runs another file once and gives you its public names as a map. Paths are relative to the importing file, and `.fx` can be left off. Names that start with `_` stay private.
@@ -447,6 +522,7 @@ Written in Faxal itself and built into the program (`import "std/..."`):
 | `std/iter` | `enumerate zip sum product count any all find take skip reverse flatten chunks unique group_by sort_by min_by max_by partition repeat` |
 | `std/text` | `pad_left pad_right center capitalize title reverse is_digit is_alpha words truncate wrap fixed commas` |
 | `std/numbers` | `gcd lcm factorial is_prime primes_up_to mean median variance stddev remap` |
+| `std/tasks` | `run spawn sleep gather timeout Channel` for `async fn` and `await` (see Coroutines and async) |
 | `std/regex` | regular expressions: `test find find_all full_match replace replace_first split escape compile` (groups, named groups, lazy quantifiers, lookahead, backreferences, `"i"` flag) |
 | `std/datetime` | dates and times (UTC): `make(y, m, d, ...)` `now()` `today()` `parse("2026-10-03 14:30")` `from_timestamp(ts)`; a DateTime has `year month day hour minute second ts`, `format("%Y-%m-%d %H:%M")`, `add_days add_months add_years add_hours ...`, `weekday()`, `days_until(other)` |
 | `std/path` | `join basename dirname ext stem split normalize with_ext is_absolute` |

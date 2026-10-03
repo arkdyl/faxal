@@ -13,7 +13,7 @@
 let KEYWORDS = [
   "let", "fn", "if", "else", "while", "for", "in", "break", "continue", "return",
   "true", "false", "nil", "and", "or", "not", "try", "catch", "throw", "import",
-  "class", "extends", "self", "super", "by",
+  "class", "extends", "self", "super", "by", "async", "await",
 ]
 let TWO_CHAR_OPS = ["**", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "..", "|>", "??", "?.", "=>", "->"]
 let ONE_CHAR_OPS = "+-*/%<>="

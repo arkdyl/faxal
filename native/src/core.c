@@ -316,6 +316,14 @@ ObjBoundMethod* newBoundMethod(Value receiver, ObjClosure* method) {
   return b;
 }
 
+ObjCoroutine* newCoroutine(Value fn) {
+  ObjCoroutine* c = ALLOC_OBJ(ObjCoroutine, OBJ_COROUTINE);
+  memset(&c->ctx, 0, sizeof c->ctx);
+  memset(&c->host, 0, sizeof c->host);
+  c->fn = fn; c->state = CO_NEW; c->resumer = NULL; c->depth = 0; c->yieldArgc = 0;
+  return c;
+}
+
 void chunkInit(Chunk* c) {
   c->code = NULL; c->lines = NULL; c->count = 0; c->capacity = 0;
   c->constants.values = NULL; c->constants.count = 0; c->constants.capacity = 0;
@@ -407,6 +415,7 @@ const char* typeName(Value v) {
         case OBJ_FUNCTION: case OBJ_CLOSURE: case OBJ_NATIVE: case OBJ_BOUND_METHOD: return "function";
         case OBJ_CLASS: return "class";
         case OBJ_INSTANCE: return "instance";
+        case OBJ_COROUTINE: return "coroutine";
         default: return "object";
       }
   }
@@ -532,6 +541,7 @@ bool appendValue(Buffer* b, Value v, bool repr, int depth) {
       return true;
     }
     case OBJ_UPVALUE: bufStr(b, "<upvalue>"); return true;
+    case OBJ_COROUTINE: bufPrintf(b, "<coroutine %s>", coroutineStatus(AS_COROUTINE(v))); return true;
   }
   return true;
 }
@@ -562,6 +572,14 @@ static void markMap(Map* m) {
   for (int i = 0; i < m->count; i++) if (m->entries[i].live) { markValue(m->entries[i].key); markValue(m->entries[i].value); }
 }
 
+/* everything a context keeps alive: its stack values, the functions running in it, its open upvalues */
+static void markContext(Context* c) {
+  if (!c->stack) return;
+  for (Value* s = c->stack; s < c->stackTop; s++) markValue(*s);
+  for (int i = 0; i < c->frameCount; i++) markObject((Obj*)c->frames[i].closure);
+  for (ObjUpvalue* u = c->openUpvalues; u; u = u->next) markObject((Obj*)u);
+}
+
 static void blacken(Obj* o) {
   switch (o->type) {
     case OBJ_FUNCTION: {
@@ -576,7 +594,7 @@ static void blacken(Obj* o) {
       for (int i = 0; i < c->upvalueCount; i++) markObject((Obj*)c->upvalues[i]);
       break;
     }
-    case OBJ_UPVALUE: markValue(((ObjUpvalue*)o)->closed); break;
+    case OBJ_UPVALUE: markValue(*((ObjUpvalue*)o)->location); break;   /* an open upvalue may outlive the coroutine stack it points into */
     case OBJ_LIST: {
       ObjList* l = (ObjList*)o;
       for (int i = 0; i < l->count; i++) markValue(l->items[i]);
@@ -603,8 +621,28 @@ static void blacken(Obj* o) {
       markValue(b->receiver); markObject((Obj*)b->method);
       break;
     }
+    case OBJ_COROUTINE: {
+      ObjCoroutine* c = (ObjCoroutine*)o;
+      markValue(c->fn);
+      if (c->state == CO_SUSPENDED) markContext(&c->ctx);
+      break;
+    }
     case OBJ_STRING: case OBJ_NATIVE: case OBJ_RANGE: break;
   }
+}
+
+/* A coroutine's stack is freed with it. Closures that captured its variables must keep them, so the upvalues
+   are closed first, while every object is still allocated (the sweep may free them in any order). */
+static void detachCoroutineUpvalues(ObjCoroutine* c) {
+  for (ObjUpvalue* u = c->ctx.openUpvalues; u; u = u->next) { u->closed = *u->location; u->location = &u->closed; }
+  c->ctx.openUpvalues = NULL;
+}
+
+static void releaseCoroutine(ObjCoroutine* c) {
+  reallocate(c->ctx.stack, sizeof(Value) * (size_t)(c->ctx.stackEnd - c->ctx.stack), 0);
+  reallocate(c->ctx.frames, sizeof(CallFrame) * (size_t)c->ctx.frameMax, 0);
+  reallocate(c->ctx.handlers, sizeof(Handler) * (size_t)c->ctx.handlerMax, 0);
+  memset(&c->ctx, 0, sizeof c->ctx);
 }
 
 static void freeObject(Obj* o) {
@@ -626,6 +664,7 @@ static void freeObject(Obj* o) {
     case OBJ_CLASS: mapFree(&((ObjClass*)o)->methods); FREE(ObjClass, o); break;
     case OBJ_INSTANCE: mapFree(&((ObjInstance*)o)->fields); FREE(ObjInstance, o); break;
     case OBJ_BOUND_METHOD: FREE(ObjBoundMethod, o); break;
+    case OBJ_COROUTINE: releaseCoroutine((ObjCoroutine*)o); FREE(ObjCoroutine, o); break;
   }
 }
 
@@ -633,6 +672,9 @@ void collectGarbage(void) {
   for (Value* s = vm.stack; s < vm.stackTop; s++) markValue(*s);
   for (int i = 0; i < vm.frameCount; i++) markObject((Obj*)vm.frames[i].closure);
   for (ObjUpvalue* u = vm.openUpvalues; u; u = u->next) markObject((Obj*)u);
+  /* coroutines that are running right now: the one on top, and the stacks of everyone who resumed it */
+  for (ObjCoroutine* c = vm.currentCo; c; c = c->resumer) { markObject((Obj*)c); markContext(&c->host); }
+  markValue(vm.yieldValue);
   markMap(&vm.builtins);
   markMap(&vm.modules);
   markObject((Obj*)vm.mainModule);
@@ -641,6 +683,9 @@ void collectGarbage(void) {
 
   while (vm.grayCount > 0) blacken(vm.grayStack[--vm.grayCount]);
   removeWhiteStrings();
+
+  for (Obj* o = vm.objects; o; o = o->next)
+    if (o->type == OBJ_COROUTINE && !o->isMarked) detachCoroutineUpvalues((ObjCoroutine*)o);
 
   Obj** link = &vm.objects;
   while (*link) {
@@ -662,6 +707,7 @@ void maybeGC(void) {
 }
 
 void freeObjects(void) {
+  for (Obj* d = vm.objects; d; d = d->next) if (d->type == OBJ_COROUTINE) detachCoroutineUpvalues((ObjCoroutine*)d);
   Obj* o = vm.objects;
   while (o) { Obj* next = o->next; freeObject(o); o = next; }
   vm.objects = NULL;

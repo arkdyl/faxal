@@ -57,6 +57,8 @@ test: bin/faxal check-embed check-amalgam
 	python3 tests/native_check.py bin/faxal
 	# the language server
 	python3 tests/lsp_test.py bin/faxal
+	# async in safe mode
+	python3 tests/async_check.py bin/faxal
 
 selfhost-fuzz: bin/faxal
 	python3 tests/selfhost_fuzz.py bin/faxal 5000
