@@ -11,7 +11,7 @@ jobs:
           - { os: ubuntu-latest, name: faxal-linux-x86_64, out: faxal }
           - { os: ubuntu-24.04-arm, name: faxal-linux-aarch64, out: faxal }
           - { os: macos-latest, name: faxal-darwin-arm64, out: faxal }
-          - { os: macos-13, name: faxal-darwin-x86_64, out: faxal }
+          - { os: macos-15-intel, name: faxal-darwin-x86_64, out: faxal }
           - { os: windows-latest, name: faxal-windows-x86_64.exe, out: faxal.exe }
     runs-on: ${{ matrix.os }}
     defaults:
