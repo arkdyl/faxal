@@ -91,6 +91,15 @@
 
 #define FX_PATH_SEP '/'
 
+/* Is this an absolute path? ("/x" everywhere; also "C:/x" on Windows) */
+static inline bool fx_is_absolute(const char* p) {
+  if (p[0] == '/') return true;
+#ifdef FX_WINDOWS
+  if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':' && (p[2] == '/' || p[2] == '\\')) return true;
+#endif
+  return false;
+}
+
 /* Rewrites backslashes as forward slashes (Windows only; a no-op elsewhere). */
 static inline void fx_slashes(char* p) {
 #ifdef FX_WINDOWS
@@ -4063,10 +4072,10 @@ static bool resolveModule(const char* rel, ObjModule* importer, ExistsFn exists,
   static const char* exts[] = { "", ".fx", ".fxc" };
   char dir[PATH_MAX], cand[PATH_MAX * 2];
   snprintf(dir, sizeof dir, "%s", importer->path->chars);
-  if (dir[0] == '/') { char* slash = strrchr(dir, '/'); *slash = '\0'; if (!dir[0]) strcpy(dir, "/"); }
+  if (fx_is_absolute(dir)) { char* slash = strrchr(dir, '/'); if (slash) *slash = '\0'; if (!dir[0]) strcpy(dir, "/"); }
   else strcpy(dir, ".");
 
-  if (rel[0] == '/') {
+  if (fx_is_absolute(rel)) {
     for (int i = 0; i < 3; i++) { snprintf(cand, sizeof cand, "%s%s", rel, exts[i]); if (exists(cand, resolved)) return true; }
     return false;
   }
@@ -4089,9 +4098,10 @@ static bool resolveModule(const char* rel, ObjModule* importer, ExistsFn exists,
       snprintf(cand, sizeof cand, forms[f], d, rel);
       if (exists(cand, resolved)) return true;
     }
-    if (d[0] == '/') {
+    if (fx_is_absolute(d)) {
       if (strcmp(d, "/") == 0) break;
       char* slash = strrchr(d, '/');
+      if (!slash) break;   /* a Windows drive such as "C:" */
       if (slash == d) strcpy(d, "/"); else *slash = '\0';
     } else {
       size_t n = strlen(d);

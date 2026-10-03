@@ -88,6 +88,15 @@
 
 #define FX_PATH_SEP '/'
 
+/* Is this an absolute path? ("/x" everywhere; also "C:/x" on Windows) */
+static inline bool fx_is_absolute(const char* p) {
+  if (p[0] == '/') return true;
+#ifdef FX_WINDOWS
+  if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':' && (p[2] == '/' || p[2] == '\\')) return true;
+#endif
+  return false;
+}
+
 /* Rewrites backslashes as forward slashes (Windows only; a no-op elsewhere). */
 static inline void fx_slashes(char* p) {
 #ifdef FX_WINDOWS
