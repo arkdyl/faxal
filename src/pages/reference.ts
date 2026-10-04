@@ -5,7 +5,7 @@ import stdlib from "../../docs/STDLIB.md?raw";
 
 export const reference: Page = {
   title: "Reference · Faxal",
-  theme: "light",
+  description: "Every faxal command and every function in the Faxal standard library, with examples you can run.",
   render(view) {
     return renderDocPage(view, {
       title: "Reference",

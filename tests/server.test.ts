@@ -4,6 +4,7 @@ import type { Server } from "node:http";
 import { openDb } from "../server/db.ts";
 import { createApp } from "../server/app.ts";
 import { createRunner } from "../server/runner.ts";
+import { clientIp } from "../server/app.ts";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 
@@ -82,5 +83,20 @@ describe("API", () => {
     const { snippets } = await (await fetch(`${base}/api/gallery`)).json();
     const mine = snippets.find((s: any) => s.id === id);
     expect(mine.preview.segments).toHaveLength(2);
+  });
+});
+
+describe("client address behind a proxy", () => {
+  const req = (forwarded: string | undefined, remote = "10.0.0.1") =>
+    ({ socket: { remoteAddress: remote }, headers: forwarded === undefined ? {} : { "x-forwarded-for": forwarded } }) as never;
+  it("uses the socket address when no proxy is trusted", () => {
+    expect(clientIp(req("1.2.3.4"), 0)).toBe("10.0.0.1");
+  });
+  it("uses the address the trusted proxy added, not what the client claims", () => {
+    expect(clientIp(req("6.6.6.6, 1.2.3.4"), 1)).toBe("1.2.3.4");
+    expect(clientIp(req("1.2.3.4"), 1)).toBe("1.2.3.4");
+  });
+  it("falls back to the socket address when the header is missing", () => {
+    expect(clientIp(req(undefined), 1)).toBe("10.0.0.1");
   });
 });

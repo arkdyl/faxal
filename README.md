@@ -107,7 +107,7 @@ Both have tests: `faxal test apps`.
 
 ## The website
 
-Pages: a home page with live demos, **Learn** (a 14-lesson guided tour with code you can run), the **Playground** (sharing and a gallery), the **Language guide** and the **Reference** (every command and standard-library function; code blocks have Run, Open and Copy buttons), **Install**, **Roadmap** (limits and changelog) and **About**. The guides are rendered from `docs/*.md`, and a test runs every code example in them.
+Pages: a home page with live demos, **Learn** (a 15-lesson guided tour with code you can run), the **Playground** (sharing and a gallery), the **Language guide** and the **Reference** (every command and standard-library function; code blocks have Run, Open and Copy buttons), **Install**, **Roadmap** (limits and changelog) and **About**. Press `/` or `Cmd/Ctrl+K` anywhere for a search that jumps to pages, lessons, guide sections and examples. The guides are rendered from `docs/*.md`, and a test runs every code example in them.
 
 A Node + SQLite server hosts the site (TypeScript, no framework). Runs go to `POST /api/run`, which starts `native/bin/faxal --sandbox --json` for each request (5 second timeout, limited output); `std/` modules work there too. Shared programs are stored in SQLite, with a small drawing preview for the gallery.
 

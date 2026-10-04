@@ -4,7 +4,7 @@ import reference from "../../docs/LANGUAGE.md?raw";
 
 export const docs: Page = {
   title: "Docs · Faxal",
-  theme: "light",
+  description: "The Faxal language guide: values, functions, classes, types, coroutines, async, modules and more, with runnable examples.",
   render(view) {
     return renderDocPage(view, {
       title: "Language guide",

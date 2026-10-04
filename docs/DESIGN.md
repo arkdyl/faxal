@@ -1,14 +1,18 @@
 ## What Faxal is for
 
-Faxal is a small programming language for **making things you can see**. You can draw with it from the very first line, and the language stays small enough to hold in your head: the whole reference fits on one page. It is a real language with a compiler, a virtual machine, a standard library, tools and tests, so what you learn on small programs carries over to big ones.
+Faxal started as a small interpreter that drew pictures with a turtle, and kept growing: a real compiler, a virtual machine, a garbage collector, a standard library, tools. The turtle is still in it, because seeing a result is the quickest way to find out whether something works.
 
-## Principles
+It is meant for small programs you want to see: drawings, scripts, little servers, things you make to learn. It is a real language with real tools, so what you learn on small programs carries over to bigger ones. It is not trying to replace anything.
 
-- **Code you can see.** Drawing is built in: a turtle, circles, rectangles and text, with SVG export. Programs show their results.
-- **Small.** One way to do most things. A language you can finish learning.
-- **Friendly.** Error messages point at the line and suggest fixes ("Did you mean 'print'?"). Mistakes should teach.
-- **Batteries included, written in Faxal.** Collections, text and number helpers, colors, a test framework, a formatter and a package manager come with it, and most of them are Faxal programs you can read.
-- **Real, not a toy.** A fast native virtual machine, a garbage collector, closures, classes, modules, standalone executables, and a test suite that is fuzzed and run under memory sanitizers.
+## What I tried to keep
+
+I tried to keep it small enough to hold in your head. There is one way to do most things, and the whole language guide fits on one page.
+
+I tried to make the errors useful. They point at the line, and when they can they suggest a fix ("Did you mean 'print'?"). A mistake should teach you something.
+
+I put as much as I could into the library and the tools themselves, and wrote them in Faxal, so that you can read how they work. The formatter, the test runner, the package manager and the compiler are all Faxal programs.
+
+And I tried to make it solid: a fast virtual machine, a garbage collector, tests that damage programs at random, and builds under memory sanitizers.
 
 ## Where the ideas come from
 

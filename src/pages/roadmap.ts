@@ -4,7 +4,7 @@ import roadmap from "../../docs/ROADMAP.md?raw";
 
 export const roadmapPage: Page = {
   title: "Roadmap · Faxal",
-  theme: "light",
+  description: "Where Faxal is today, its honest limits, what comes next, and the changelog.",
   render(view) {
     return renderDocPage(view, {
       title: "Roadmap",

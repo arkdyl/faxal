@@ -37,11 +37,24 @@ function send(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+/**
+ * The address of whoever is calling. Behind a reverse proxy (every host that serves a website runs one) the socket
+ * address is the proxy's, so all visitors would share one rate limit. With TRUSTED_PROXY_HOPS=1 the address the
+ * proxy appended to X-Forwarded-For is used instead; a client can't forge that one, only the entries before it.
+ */
+export function clientIp(req: IncomingMessage, hops = Number(process.env.TRUSTED_PROXY_HOPS ?? 0)): string {
+  const direct = req.socket.remoteAddress ?? "unknown";
+  if (!hops) return direct;
+  const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return forwarded[forwarded.length - hops] ?? direct;
+}
+
 // very small fixed-window limiter: N creates per minute per IP
 function makeLimiter(max: number) {
   const hits = new Map<string, { count: number; reset: number }>();
   return (ip: string) => {
     const now = Date.now();
+    if (hits.size > 10_000) for (const [k, v] of hits) if (now > v.reset) hits.delete(k);
     const h = hits.get(ip);
     if (!h || now > h.reset) { hits.set(ip, { count: 1, reset: now + 60_000 }); return true; }
     return ++h.count <= max;
@@ -75,7 +88,7 @@ export function createApp(db: Db, staticDir: string, runner: Runner) {
     }
 
     if (req.method === "POST" && path === "/api/snippets") {
-      const ip = req.socket.remoteAddress ?? "unknown";
+      const ip = clientIp(req);
       if (!allowCreate(ip)) throw new HttpError(429, "Slow down, too many shares");
       const body = await readJson(req);
       const code = typeof body.code === "string" ? body.code : "";
@@ -89,7 +102,7 @@ export function createApp(db: Db, staticDir: string, runner: Runner) {
     }
 
     if (req.method === "POST" && path === "/api/run") {
-      const ip = req.socket.remoteAddress ?? "unknown";
+      const ip = clientIp(req);
       if (!allowRun(ip)) throw new HttpError(429, "Slow down, too many runs");
       const body = await readJson(req);
       const code = typeof body.code === "string" ? body.code : "";

@@ -1,0 +1,10 @@
+# Render: New + Blueprint, point it at this repository.
+services:
+  - type: web
+    name: faxal
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: PORT
+        value: "8080"

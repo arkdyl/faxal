@@ -1,8 +1,6 @@
 import type { Page } from "../router";
 import { navigate } from "../router";
-import { createEditor } from "../ui/editor";
-import { drawResult } from "../ui/canvas";
-import { runProgram, Outcome } from "../runner";
+import { shell } from "../ui/app";
 import { LESSONS } from "../lessons";
 
 const KEY = "faxal-lessons-done";
@@ -10,88 +8,51 @@ const loadDone = (): Set<string> => {
   try { return new Set(JSON.parse(localStorage.getItem(KEY) ?? "[]")); } catch { return new Set(); }
 };
 const saveDone = (s: Set<string>) => { try { localStorage.setItem(KEY, JSON.stringify([...s])); } catch { /* private mode */ } };
-const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
 export const learn: Page = {
   title: "Learn · Faxal",
-  theme: "light",
+  description: "A hands-on tour of Faxal in fifteen short lessons, with code you can run and change.",
   render(view, params) {
+    if (params.id && !LESSONS.some((l) => l.id === params.id)) { navigate("/learn"); return; }
     const index = Math.max(0, LESSONS.findIndex((l) => l.id === params.id));
     const lesson = LESSONS[index];
     const done = loadDone();
     document.title = `${lesson.title} · Learn Faxal`;
 
+    const outline = () => LESSONS.map((l, i) => ({ href: `/learn/${l.id}`, title: l.title, level: 2 as const, mark: done.has(l.id) ? "✓" : String(i + 1).padStart(2, " ") }));
+    shell.setOutline(outline(), "Lessons");
+    shell.here(`/learn/${lesson.id}`);
+
+    const prev = LESSONS[index - 1];
+    const next = LESSONS[index + 1];
     view.innerHTML = `
-      <section class="wrap learn">
-        <aside class="lessons">
-          <div class="lessons-head"><b>The tour</b><span>${done.size} of ${LESSONS.length} done</span></div>
-          <div class="progress"><i style="width:${(done.size / LESSONS.length) * 100}%"></i></div>
-          <nav>${LESSONS.map((l, i) => `<a href="/learn/${l.id}" data-link class="${i === index ? "here" : ""}"><span class="num">${done.has(l.id) ? "✓" : i + 1}</span>${l.title}</a>`).join("")}</nav>
-        </aside>
-        <div class="lesson">
-          <p class="eyebrow">Lesson ${index + 1} of ${LESSONS.length}</p>
-          <h1 class="h-lg">${lesson.title}</h1>
-          ${lesson.text.map((t) => `<p class="lesson-text">${t}</p>`).join("")}
-          <div class="try">
-            <div class="try-bar"><span>Edit the code, then run it</span><button id="run" class="btn-run">Run <kbd>${isMac ? "⌘" : "Ctrl"}↵</kbd></button></div>
-            <div class="try-body">
-              <div class="try-editor" id="editor"></div>
-              <div class="try-out">
-                <canvas id="canvas" hidden></canvas>
-                <pre id="out" aria-live="polite">Press Run to see what it does.</pre>
-              </div>
-            </div>
-          </div>
-          <p class="task"><b>Your turn.</b> ${lesson.task}</p>
-          <div class="lesson-nav">
-            ${index > 0 ? `<a class="btn btn-soft" href="/learn/${LESSONS[index - 1].id}" data-link>← ${LESSONS[index - 1].title}</a>` : "<span></span>"}
-            ${index < LESSONS.length - 1
-              ? `<a class="btn btn-dark" href="/learn/${LESSONS[index + 1].id}" data-link>${LESSONS[index + 1].title} →</a>`
-              : `<a class="btn btn-dark" href="/play" data-link>Open the playground →</a>`}
-          </div>
-        </div>
-      </section>`;
+      <article class="doc-page lesson">
+        <p class="eyebrow">lesson ${index + 1} of ${LESSONS.length} · ${done.size} done</p>
+        <h1>${lesson.title}</h1>
+        ${lesson.text.map((t) => `<p>${t}</p>`).join("")}
+        <p class="try-line"><button type="button" class="btn" id="open-bench">edit and run this code</button> <span class="dim">it opens in the workbench</span></p>
+        <pre class="snippet lesson-code"><code id="lesson-code"></code></pre>
+        <p class="task"><b>Your turn.</b> ${lesson.task}</p>
+        <nav class="lesson-nav" aria-label="Lessons">
+          ${prev ? `<a href="/learn/${prev.id}" data-link>← ${prev.title}</a>` : "<span></span>"}
+          ${next ? `<a href="/learn/${next.id}" data-link>${next.title} →</a>` : `<a href="/play" data-link>the playground →</a>`}
+        </nav>
+      </article>`;
+    view.querySelector<HTMLElement>("#lesson-code")!.textContent = lesson.code;
 
-    const out = view.querySelector<HTMLElement>("#out")!;
-    const canvas = view.querySelector<HTMLCanvasElement>("#canvas")!;
-    const runBtn = view.querySelector<HTMLButtonElement>("#run")!;
-    let stop = () => {};
-    let token = 0;
-    let last: Outcome | null = null;
+    const bench = shell.bench;
+    const load = () => bench.open(lesson.code, `${lesson.id}.fx`);
+    view.querySelector("#open-bench")!.addEventListener("click", load);
+    // on a wide screen the editor opens beside the lesson by itself; on a phone it would cover the text
+    if (window.innerWidth >= 1400) load();
 
-    const run = async () => {
-      const my = ++token;
-      runBtn.disabled = true;
-      const res = await runProgram(editor.getValue());
-      if (my !== token) return;
-      runBtn.disabled = false;
-      last = res;
-      const err = res.error;
-      out.className = err ? "bad" : "";
-      const label = err?.kind === "syntax" ? "Syntax error" : err?.kind === "limit" ? "Stopped" : "Error";
-      out.textContent = res.output.replace(/\n$/, "") + (err ? `${res.output ? "\n" : ""}${label}${err.line ? ` (line ${err.line})` : ""}: ${err.message}` : "");
-      if (!out.textContent) out.textContent = "(no output)";
-      editor.setErrorLine(err?.line || null);
-      stop();
-      const draws = !!(res.drawing.segments.length || res.drawing.shapes.length);
-      canvas.hidden = !draws;
-      out.classList.toggle("short", draws);
-      if (draws) stop = drawResult(canvas, res.drawing, { animate: true });
-      if (!err && !done.has(lesson.id)) {
-        done.add(lesson.id);
-        saveDone(done);
-        view.querySelector(".lessons-head span")!.textContent = `${done.size} of ${LESSONS.length} done`;
-        view.querySelector<HTMLElement>(".progress i")!.style.width = `${(done.size / LESSONS.length) * 100}%`;
-        const num = view.querySelectorAll<HTMLElement>(".lessons nav .num")[index];
-        num.textContent = "✓";
-      }
-    };
-
-    const editor = createEditor(view.querySelector("#editor")!, { value: lesson.code, onRun: run });
-    runBtn.addEventListener("click", run);
-    const onResize = () => { if (last && !canvas.hidden) drawResult(canvas, last.drawing); };
-    window.addEventListener("resize", onResize);
-    if (params.id && !LESSONS.some((l) => l.id === params.id)) navigate("/learn");
-    return () => { window.removeEventListener("resize", onResize); stop(); token++; };
+    const off = bench.onRan((res) => {
+      if (res.error || done.has(lesson.id)) return;
+      done.add(lesson.id);
+      saveDone(done);
+      shell.setOutline(outline(), "Lessons");
+      shell.here(`/learn/${lesson.id}`);
+    });
+    return () => { off(); shell.clearOutline(); };
   },
 };

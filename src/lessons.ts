@@ -109,6 +109,15 @@ export const LESSONS: Lesson[] = [
     task: "Add a fourth task that sleeps for 0.5 seconds. In what order do they finish?",
   },
   {
+    id: "web", title: "Web servers",
+    text: [
+      "<code>std/http</code> is an HTTP client and server written in Faxal. A <code>Router</code> maps paths like <code>/notes/:id</code> to functions that take a request and give back a response: text, HTML, or a map or list (sent as JSON).",
+      "This page can't open network connections, so here the router is called directly with made-up requests. On your own computer, <code>http.serve(8080, app)</code> serves the very same router to browsers. The repository's <code>apps/notes</code> is a whole web app built this way.",
+    ],
+    code: `import "std/http" as http\n\nlet notes = {1: "Buy milk", 2: "Learn Faxal"}\n\nlet app = http.Router()\napp.get("/hello", fn(req) => http.text("Hello, " + (req.query.name ?? "you") + "!"))\napp.get("/notes/:id", fn(req) {\n  let note = notes.get(int(req.params.id))\n  if note == nil { return http.send_json({error: "no such note"}, 404) }\n  return http.send_json({id: req.params.id, text: note})\n})\n\nfn ask(method, target) {\n  let res = app.handle(http.Request(method, target, {}, ""))\n  print(method, target, "->", res.status, res.body)\n}\nask("GET", "/hello?name=Ada")\nask("GET", "/notes/2")\nask("GET", "/notes/9")\nask("DELETE", "/hello")\nask("GET", "/nowhere")`,
+    task: "Add a route <code>/add?a=2&b=3</code> that answers with the sum (remember <code>int(...)</code>).",
+  },
+  {
     id: "library", title: "The standard library",
     text: [
       "Faxal comes with modules you load with <code>import</code>: collections, text, numbers, colours, regular expressions, dates, paths, CSV, random numbers. They are written in Faxal, and you can read them. The reference page lists everything.",

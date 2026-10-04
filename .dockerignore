@@ -1,0 +1,16 @@
+node_modules
+dist
+data
+.git
+.github
+.claude
+legacy
+editors
+native/bin
+native/tests
+native/lib
+native/tools
+apps
+tests
+**/*.vsix
+**/node_modules
