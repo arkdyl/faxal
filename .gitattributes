@@ -1,0 +1,8 @@
+# Keep line endings the same on every system: the tests compare exact text
+*.fx text eol=lf
+*.fxc binary
+*.c text eol=lf
+*.h text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.py text eol=lf
