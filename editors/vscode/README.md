@@ -1,14 +1,27 @@
-# Faxal for Visual Studio Code
+# Faxal for VS Code
 
-Syntax highlighting, comment toggling, bracket matching and auto-indent for `.fx` files.
+Syntax highlighting and the Faxal language server (`faxal lsp`):
 
-## Install
+- errors as you type, checked by the real compiler
+- completion, hover help, signature help while you type arguments
+- go to definition (across `import`ed files), find references, rename
+- format document (the same formatter as `faxal fmt`)
+- an outline of functions, classes and variables; symbol search
+- the commands "Faxal: Run this file" and "Faxal: Restart the language server"
 
-Copy (or link) this folder into your VS Code extensions folder and restart VS Code:
+You need the `faxal` program on your PATH (see https://github.com/arkdyl/faxal), or set `faxal.path` in the settings.
+
+## Install it
+
+From a checkout of the repository:
 
 ```bash
-# macOS / Linux
-ln -s "$PWD" ~/.vscode/extensions/faxal-1.0.0
+cd editors/vscode
+npm install                       # fetches vscode-languageclient
+npx @vscode/vsce package          # makes faxal-1.1.0.vsix
+code --install-extension faxal-1.1.0.vsix
 ```
 
-Format on save: install the "Run on Save" extension and run `faxal fmt ${file}`, or run `faxal fmt` in the terminal.
+Or, without packaging, copy this folder to `~/.vscode/extensions/faxal` (after `npm install`) and restart VS Code.
+
+Other editors (Neovim, Helix, Zed, Emacs, Sublime) can use `faxal lsp` directly: tell them to run that command for `.fx` files.

@@ -237,6 +237,75 @@ static bool invokeFromClass(ObjClass* klass, ObjString* name, int argc) {
   return callClosure(AS_CLOSURE(m), argc);
 }
 
+/* __call_named(callee, "a,b", positional..., values of a and b...)   (see namedCall in compiler.c)
+   Puts the arguments in the order of the callee's parameters and then makes an ordinary call. */
+static bool callValue(Value callee, int argc);
+static bool nativeCallNamed(int argc, Value* args, Value* out) { (void)argc; (void)args; (void)out; return true; }   /* only its address matters: see callValue */
+
+static bool callNamed(int argc) {
+  Value* base = vm.stackTop - argc - 1;          /* base[0] is __call_named itself */
+  Value callee = base[1];
+  if (!IS_STRING(base[2])) return throwError("Internal error: bad named call");
+  const char* names = AS_CSTRING(base[2]);
+  int k = 1;
+  for (const char* p = names; *p; p++) if (*p == ',') k++;
+  if (!names[0]) k = 0;
+  int np = argc - 2 - k;
+  if (np < 0) return throwError("Internal error: bad named call");
+
+  ObjFunction* fn = NULL;
+  ObjClosure* target = NULL;
+  if (IS_CLOSURE(callee)) target = AS_CLOSURE(callee);
+  else if (IS_BOUND(callee)) target = AS_BOUND(callee)->method;
+  else if (IS_CLASS(callee)) {
+    Value init;
+    if (mapGet(&AS_CLASS(callee)->methods, OBJ_VAL(cstring("init")), &init)) target = AS_CLOSURE(init);
+    else return throwError("%s has no init method, so it takes no arguments", AS_CLASS(callee)->name->chars);
+  } else if (IS_NATIVE(callee)) return throwError("%s() is a built-in function: it doesn't take named arguments", AS_NATIVE(callee)->name);
+  else return throwError("Can only call functions, but this is %s", typeName(callee));
+  fn = target->function;
+  const char* fname = fn->name ? fn->name->chars : "function";
+  if (fn->arity > 0 && !fn->paramNames) return throwError("%s() was compiled without parameter names, so it can't take named arguments (compile it again)", fname);
+  if (np > fn->arity) return throwError("%s() takes at most %d argument%s but got %d", fname, fn->arity, fn->arity == 1 ? "" : "s", np + k);
+
+  Value slots[256];
+  bool given[256];
+  for (int i = 0; i < fn->arity; i++) { slots[i] = NIL_VAL; given[i] = false; }
+  for (int i = 0; i < np; i++) { slots[i] = base[3 + i]; given[i] = true; }
+  const char* p = names;
+  for (int j = 0; j < k; j++) {
+    const char* e = strchr(p, ',');
+    size_t len = e ? (size_t)(e - p) : strlen(p);
+    int found = -1;
+    for (int i = 0; i < fn->arity; i++)
+      if ((size_t)fn->paramNames[i]->length == len && memcmp(fn->paramNames[i]->chars, p, len) == 0) { found = i; break; }
+    if (found < 0) {
+      char want[64]; snprintf(want, sizeof want, "%.*s", len > 60 ? 60 : (int)len, p);
+      Suggest s = { want, "", 99 };
+      for (int i = 0; i < fn->arity; i++) consider(&s, fn->paramNames[i]->chars);
+      if (fn->arity == 0) return throwError("%s() takes no arguments, so there is no parameter '%s'", fname, want);
+      Buffer list; bufInit(&list);
+      for (int i = 0; i < fn->arity; i++) { if (i) bufStr(&list, ", "); bufStr(&list, fn->paramNames[i]->chars); }
+      bool ok = throwError("%s() has no parameter '%s' (its parameters: %s)%s", fname, want, list.data ? list.data : "", hint(&s));
+      bufFree(&list);
+      return ok;
+    }
+    if (given[found]) return throwError("%s() got more than one value for '%s'", fname, fn->paramNames[found]->chars);
+    slots[found] = base[3 + np + j];
+    given[found] = true;
+    p = e ? e + 1 : p + len;
+  }
+  for (int i = 0; i < fn->minArity; i++)
+    if (!given[i]) return throwError("%s() is missing the argument '%s'", fname, fn->paramNames[i]->chars);
+
+  /* the real call: [callee, arguments in parameter order] */
+  if (vm.stackTop + 1 + fn->arity > vm.stackEnd) return throwError("Stack overflow (too much recursion)");
+  base[0] = callee;
+  for (int i = 0; i < fn->arity; i++) base[1 + i] = slots[i];
+  vm.stackTop = base + 1 + fn->arity;
+  return callValue(callee, fn->arity);
+}
+
 static bool callValue(Value callee, int argc) {
   if (IS_OBJ(callee)) {
     if (OBJ_TYPE(callee) == OBJ_BOUND_METHOD) {
@@ -255,6 +324,7 @@ static bool callValue(Value callee, int argc) {
     if (OBJ_TYPE(callee) == OBJ_CLOSURE) return callClosure(AS_CLOSURE(callee), argc);
     if (OBJ_TYPE(callee) == OBJ_NATIVE) {
       ObjNative* n = AS_NATIVE(callee);
+      if (n->fn == nativeCallNamed) return callNamed(argc);
       if (!checkArity(n->name, argc, n->minArgs, n->maxArgs)) return false;
       Value result = NIL_VAL;
       if (!n->fn(argc, vm.stackTop - argc, &result)) return false;
@@ -481,6 +551,7 @@ const MethodDef coroutineMethods[] = {
 };
 
 void registerCoroutineBuiltins(Map* g) {
+  defineNative(g, "__call_named", nativeCallNamed, 3, -1);   /* what f(x, width = 3) compiles to */
   defineNative(g, "coroutine", co_create, 1, 1);
   defineNative(g, "__coroutine", co_create, 1, 1);   /* what `async fn` compiles to */
   defineNative(g, "yield", co_yield, 0, 1);

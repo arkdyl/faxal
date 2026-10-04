@@ -120,6 +120,7 @@ fn to_wire(program) {
       min_arity: f.min_arity,
       upvalues: f.upvalue_count,
       script: f.is_script,
+      params: f.params,
       code: f.code,
       lines: f.lines,
       constants: constants,

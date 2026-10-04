@@ -10,7 +10,7 @@
 #include <math.h>
 
 #define FXC_MAGIC "\x7f" "FXC"   /* starts with DEL, which can never begin valid Faxal source */
-#define FORMAT_VERSION 1
+#define FORMAT_VERSION 2   /* 2 added the parameter names after each function header; version 1 files still load */
 #define MAX_FUNCTIONS 100000
 #define MAX_STACK_DEPTH 139000   /* below the slack the VM keeps after STACK_MAX, see faxal.h */
 
@@ -72,6 +72,8 @@ bool bytecodeWrite(ObjFunction* main, const char* sourceName, Buffer* out) {
     put8(out, (unsigned)f->minArity);
     put16(out, (unsigned)f->upvalueCount);
     put8(out, f->isScript ? 1 : 0);
+    put8(out, f->paramNames ? 1 : 0);                    /* parameter names follow (so named arguments work) */
+    if (f->paramNames) for (int k = 0; k < f->arity; k++) putBytes(out, f->paramNames[k]->chars, (size_t)f->paramNames[k]->length);
 
     Chunk* c = &f->chunk;
     put32(out, (uint32_t)c->count);
@@ -147,7 +149,7 @@ ObjFunction* bytecodeRead(const unsigned char* data, size_t len, ObjModule* modu
   Cursor cur = { data + 4, len - 4 - 4, NULL };
   Cursor* c = &cur;
   uint32_t version = get16(c), revision = get16(c);
-  if (version != FORMAT_VERSION) FAIL("this bytecode file uses format version %u, but this faxal understands version %d", version, FORMAT_VERSION);
+  if (version != FORMAT_VERSION && version != 1) FAIL("this bytecode file uses format version %u, but this faxal understands version %d", version, FORMAT_VERSION);
   if (revision != FAXAL_BYTECODE_REVISION) FAIL("this bytecode file was made by an incompatible faxal (instruction set %u, this faxal uses %d): compile it again", revision, FAXAL_BYTECODE_REVISION);
   get32(c); /* flags */
   uint32_t n;
@@ -178,6 +180,15 @@ ObjFunction* bytecodeRead(const unsigned char* data, size_t len, ObjModule* modu
     f->minArity = (int)get8(c);
     f->upvalueCount = (int)get16(c);
     f->isScript = get8(c) == 1;
+    if (version >= 2 && get8(c) == 1) {
+      if (f->arity > 0) { f->paramNames = ALLOCATE(ObjString*, f->arity); for (int k = 0; k < f->arity; k++) f->paramNames[k] = NULL; }
+      for (int k = 0; k < f->arity; k++) {
+        uint32_t pl;
+        const unsigned char* ps = getBytes(c, &pl);
+        if (c->why) FAIL("%s", c->why);
+        f->paramNames[k] = newString((const char*)ps, (int)pl);
+      }
+    }
 
     uint32_t codeLen = get32(c);
     if (c->why) FAIL("%s", c->why);

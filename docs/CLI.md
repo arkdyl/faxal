@@ -73,14 +73,21 @@ The built program takes its own command-line arguments in `os.args` and needs no
 
 ## Editors
 
-`faxal lsp` is a language server (the Language Server Protocol over standard input and output). It gives any editor that supports the protocol errors as you type, completion, hover help, format document and an outline of functions and classes. Tell the editor to run `faxal lsp` for `.fx` files.
+`faxal lsp` is a language server (the Language Server Protocol over standard input and output). It gives any editor that supports the protocol:
+
+- errors as you type, checked by the real compiler
+- completion, hover help, and signature help while you type arguments (it follows named arguments)
+- **go to definition** (also into other files: `import "x"` and `module.name`), **find references**, **highlight uses**, and **rename** (scope-aware: a local `total` and a global `total` are different names)
+- format document, an outline of functions and classes, and symbol search
+
+Tell the editor to run `faxal lsp` for `.fx` files. Columns count bytes, so on lines with non-ASCII text positions may be off.
 
 ```lua
 -- Neovim
 vim.lsp.start({ name = "faxal", cmd = { "faxal", "lsp" }, root_dir = vim.fn.getcwd() })
 ```
 
-The repository also has a VS Code grammar for syntax highlighting in `editors/vscode/`.
+For VS Code there is an extension in `editors/vscode/` (syntax colors plus the language server): see its README to install it.
 
 ## Installing
 

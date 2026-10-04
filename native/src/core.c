@@ -237,7 +237,7 @@ bool mapDelete(Map* m, Value key) {
 
 ObjFunction* newFunction(void) {
   ObjFunction* f = ALLOC_OBJ(ObjFunction, OBJ_FUNCTION);
-  f->arity = 0; f->minArity = 0; f->upvalueCount = 0; f->name = NULL; f->module = NULL; f->isScript = false;
+  f->arity = 0; f->minArity = 0; f->upvalueCount = 0; f->name = NULL; f->module = NULL; f->isScript = false; f->paramNames = NULL;
   chunkInit(&f->chunk);
   return f;
 }
@@ -585,6 +585,7 @@ static void blacken(Obj* o) {
     case OBJ_FUNCTION: {
       ObjFunction* f = (ObjFunction*)o;
       markObject((Obj*)f->name); markObject((Obj*)f->module);
+      if (f->paramNames) for (int i = 0; i < f->arity; i++) markObject((Obj*)f->paramNames[i]);
       for (int i = 0; i < f->chunk.constants.count; i++) markValue(f->chunk.constants.values[i]);
       break;
     }
@@ -648,7 +649,12 @@ static void releaseCoroutine(ObjCoroutine* c) {
 static void freeObject(Obj* o) {
   switch (o->type) {
     case OBJ_STRING: reallocate(o, sizeof(ObjString) + (size_t)((ObjString*)o)->length + 1, 0); break;
-    case OBJ_FUNCTION: chunkFree(&((ObjFunction*)o)->chunk); FREE(ObjFunction, o); break;
+    case OBJ_FUNCTION: {
+      ObjFunction* f = (ObjFunction*)o;
+      if (f->paramNames) FREE_ARRAY(ObjString*, f->paramNames, f->arity);
+      chunkFree(&f->chunk); FREE(ObjFunction, o);
+      break;
+    }
     case OBJ_CLOSURE: {
       ObjClosure* c = (ObjClosure*)o;
       FREE_ARRAY(ObjUpvalue*, c->upvalues, c->upvalueCount);

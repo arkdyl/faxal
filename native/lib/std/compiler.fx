@@ -153,6 +153,7 @@ class FnState {
     self.constants = []
     self.arity = 0
     self.min_arity = 0
+    self.params = []                # the parameter names
     self.locals = [{name: (type == "method" or type == "initializer") and "self" or "", depth: 0, captured: false}]
     self.upvalues = []
     self.scope_depth = 0
@@ -317,6 +318,7 @@ fn end_compiler() {
     name: cur.name,
     arity: cur.arity,
     min_arity: cur.min_arity,
+    params: cur.params,
     upvalue_count: cur.upvalues.len(),
     is_script: cur.type == "script",
     code: cur.code,
@@ -686,7 +688,71 @@ fn argument_list() {
   return argc % 256
 }
 
+# Named arguments: f(1, width = 3). Before the arguments are compiled, a look ahead finds out whether there
+# are any and what they are called, because the code that calls f has to be set up differently:
+#   f(a, w = 3)   becomes   __call_named(f, "w", a, 3)   and the VM matches the names to parameters.
+fn scan_named_args() {
+  let names = []
+  let toks = ps.toks
+  let i = ps.pos - 1                 # where ps.current is
+  if i < 0 { return names }
+  let depth = 0
+  let arg_start = true
+  while i < len(toks) {
+    let t = toks[i]
+    let ty = t.type
+    if ty == "EOF" or ty == "ERROR" { break }
+    if ty == "(" or ty == "[" or ty == "{" {
+      depth += 1
+    } else if ty == ")" or ty == "]" or ty == "}" {
+      if depth == 0 { break }
+      depth -= 1
+    }
+    if depth == 0 and arg_start and ty == "IDENT" and i + 1 < len(toks) and toks[i + 1].type == "=" {
+      names.push(t.text)
+      arg_start = false
+      i += 2
+      continue
+    }
+    if depth == 0 { arg_start = ty == "," }
+    i += 1
+  }
+  return names
+}
+
+# The callee is on the stack and "(" has been read.
+fn named_call(names) {
+  emit_byte(OP.GET_GLOBAL)
+  emit_short(identifier_constant("__call_named"))
+  emit_byte(OP.SWAP)
+  emit_constant(names.join(","))
+  let argc = 0
+  let named = false
+  if not check(")") {
+    let more = true
+    while more {
+      if check(")") { break }
+      if check("IDENT") and peek_next().type == "=" {
+        advance()
+        advance()
+        named = true
+        expression()
+      } else {
+        if named { error("A positional argument can't come after a named argument.") }
+        expression()
+      }
+      if argc >= 253 { error("Can't have more than 253 arguments in a call with named arguments.") }
+      argc += 1
+      more = match(",")
+    }
+  }
+  consume(")", "Expected ')' after arguments.")
+  emit_bytes(OP.CALL, (2 + argc) % 256)
+}
+
 fn call(can_assign) {
+  let names = scan_named_args()
+  if len(names) > 0 { named_call(names); return }
   let argc = argument_list()
   emit_bytes(OP.CALL, argc)
 }
@@ -710,6 +776,13 @@ fn dot(can_assign) {
     emit_byte(OP.SET_PROPERTY)
     emit_short(name)
   } else if match("(") {
+    let names = scan_named_args()
+    if len(names) > 0 {
+      emit_byte(OP.GET_PROPERTY)
+      emit_short(name)
+      named_call(names)
+      return
+    }
     let argc = argument_list()
     emit_byte(OP.INVOKE)
     emit_short(name)
@@ -830,6 +903,7 @@ fn function(type, name, is_async = false) {
       let p = parse_variable("Expected a parameter name.")
       define_variable(p)
       let param_name = ps.previous.text
+      cur.params.push(param_name)
       let param_spec = ""
       if match(":") { param_spec = type_spec() }
       if match("=") {
@@ -934,6 +1008,7 @@ fn pipe_op(can_assign) {
   emit_byte(OP.SWAP)
   let argc = 1
   if match("(") {
+    if len(scan_named_args()) > 0 { error("Named arguments aren't supported after '|>': call the function with ( ) instead.") }
     let extra = argument_list()
     if extra + 1 > 255 { error("Too many arguments.") }
     argc += extra
@@ -955,10 +1030,17 @@ fn optional_dot(can_assign) {
   consume("IDENT", "Expected a property name after '?.'.")
   let name = identifier_constant(ps.previous.text)
   if match("(") {
-    let argc = argument_list()
-    emit_byte(OP.INVOKE)
-    emit_short(name)
-    emit_byte(argc)
+    let names = scan_named_args()
+    if len(names) > 0 {
+      emit_byte(OP.GET_PROPERTY)
+      emit_short(name)
+      named_call(names)
+    } else {
+      let argc = argument_list()
+      emit_byte(OP.INVOKE)
+      emit_short(name)
+      emit_byte(argc)
+    }
   } else {
     emit_byte(OP.GET_PROPERTY)
     emit_short(name)
@@ -982,6 +1064,14 @@ fn super_(can_assign) {
   let name = identifier_constant(ps.previous.text)
   named_variable("self", false)
   if match("(") {
+    let names = scan_named_args()
+    if len(names) > 0 {
+      named_variable("super", false)
+      emit_byte(OP.GET_SUPER)
+      emit_short(name)
+      named_call(names)
+      return
+    }
     let argc = argument_list()
     named_variable("super", false)
     emit_byte(OP.SUPER_INVOKE)

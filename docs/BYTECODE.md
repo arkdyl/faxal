@@ -1,6 +1,6 @@
 ## Bytecode files (.fxc)
 
-A `.fxc` file is a compiled Faxal module: the instructions, line numbers and constants of every function in it. `faxal compile app.fx` writes one, `faxal app.fxc` runs it, and `faxal build` packs them into executables. This page describes the format (version 1).
+A `.fxc` file is a compiled Faxal module: the instructions, line numbers and constants of every function in it. `faxal compile app.fx` writes one, `faxal app.fxc` runs it, and `faxal build` packs them into executables. This page describes the format (version 2; version 1 files, which have no parameter names, still load).
 
 All numbers are little-endian. A *string* is a `u32` length followed by that many bytes.
 
@@ -10,14 +10,14 @@ All numbers are little-endian. A *string* is a `u32` length followed by that man
 file      = header function* checksum
 header    = magic  version  revision  flags  faxal-version  source-name  function-count
 magic     = 7F 46 58 43              (the bytes DEL, "F", "X", "C": DEL can never start valid source code)
-version   = u16                      the file format, currently 1
+version   = u16                      the file format, currently 2 (version 1 files still load)
 revision  = u16                      the instruction set, see below
 flags     = u32                      0 for now
 faxal-version = string               the faxal that wrote the file (informational)
 source-name   = string               the name of the source file (used in error traces; imports resolve next to the .fxc)
 function-count = u32
 
-function  = name arity min-arity upvalue-count is-script
+function  = name arity min-arity upvalue-count is-script [has-params param-name*]
             code-length code
             run-count run*
             constant-count constant*
@@ -26,6 +26,8 @@ arity     = u8      parameters
 min-arity = u8      parameters without a default value
 upvalue-count = u16 outer variables captured
 is-script = u8      1 for the main code of the file, else 0
+has-params = u8     (version 2) 1 if `arity` parameter names follow, so named arguments work; 0 for no parameters
+param-name = string the name of one parameter, in order
 code      = bytes   the instructions
 run       = line:u32 length:u32     the next `length` bytes of code come from source line `line`
 constant  = 00 f64                 a number (the 8 bytes of the IEEE 754 double)

@@ -9,8 +9,8 @@ Faxal is a complete, working language with its own compiler, virtual machine and
 | Compiler | written in Faxal, built into the program; a second one written in C produces identical bytecode |
 | Programs | run from source, from `.fxc` bytecode files, as standalone executables, or as native executables through C |
 | Tools | `fmt`, `test`, `init`, package manager, language server, REPL |
-| Library | collections, iteration, text, numbers, colors, regex, dates, paths, CSV, random, tasks, test framework |
-| Platforms | developed on macOS; Linux and Windows builds are written and covered by CI |
+| Library | collections, iteration, text, numbers, colors, regex, dates, paths, CSV, random, tasks, HTTP, encodings, test framework |
+| Platforms | developed on macOS; Linux and Windows are built and tested by CI on every change |
 | Testing | specs, library tests, formatter proof, two-compiler comparison, bytecode fuzzing, sanitizers and a GC stress build |
 
 ## Honest limits
@@ -18,23 +18,30 @@ Faxal is a complete, working language with its own compiler, virtual machine and
 - **Speed.** Faxal is an interpreter. It is fast for an interpreter, in the range of Python and Lua, and far behind compiled languages. Programs "built natively" still run on the virtual machine: the build gives you a self-contained executable, not machine code made from your functions.
 - **Types.** Types are optional and checked while the program runs, not before. There are no generics and no type inference.
 - **Concurrency.** `async` tasks and coroutines take turns on one thread. There are no threads and no parallelism. A coroutine has a stack of its own that holds about 250 nested calls.
-- **Library.** There is no networking (HTTP, sockets), no date-time zones (UTC only), and no Unicode case or normalisation functions.
+- **Library.** There is no TLS (so no `https://`), no date-time zones (UTC only), and no Unicode case or normalisation functions. The HTTP server handles one request per connection and has no HTTP/2 or WebSockets.
 - **Ecosystem.** There is no package registry; packages come from git repositories or folders.
 - **Platforms.** Linux and Windows have had much less real use than macOS.
 
 ## Next
 
-- an HTTP client and server for the standard library
-- named arguments (`f(x, width = 3)`)
+- HTTPS (TLS) for `std/http`
+- a package registry
 - real machine-code generation, so the "native" programs are faster, not just self-contained
 - a faster virtual machine: cheaper dispatch, caching compiled imports
-- go to definition, find references and rename in the language server
 - cancelling tasks, and a way to wait for the first of several
 - running the virtual machine in the browser (WebAssembly), so the site works without a server
 - cross-compiling `faxal build` for other operating systems
 - accounts, likes and comments in the gallery
 
 ## Changelog
+
+### Version 1.1
+
+- **Named arguments.** `box(3, label = "big")`, for functions, methods, classes and `super.init(x, y = y)`. Bytecode files (format version 2) carry parameter names; version 1 files still load.
+- **Networking.** The `net` functions (TCP) and `std/http`: an HTTP/1.1 client and server, with a router, JSON helpers, redirects, chunked bodies and an async server where every connection is a task. Also `std/encoding` (base64, hex, URL, HTML) and `s.bytes()` / `from_bytes()`.
+- **Language server.** Go to definition (across files), find references, rename, document highlights, signature help and workspace symbols, built on the new `std/analyze`. A real VS Code extension that starts `faxal lsp`.
+- **Real programs.** `apps/mdsite` (a Markdown static-site generator: it builds this project's docs) and `apps/notes` (a web app with a REST API and a page, served by Faxal), both with tests.
+- **Regular expressions** no longer run out of stack on long texts.
 
 ### Version 1.0
 

@@ -81,4 +81,13 @@ t.test("bad patterns report errors", fn() {
   t.throws(fn() { re.test("a\\", "x") }, "trailing backslash")
 })
 
+t.test("long texts do not overflow the stack", fn() {
+  let long = "ab ".repeat(3000)
+  t.eq(re.find("[a-z ]+", long).text.len(), 9000)
+  t.eq(re.find_all("\\w+", long).len(), 3000)
+  t.eq(re.replace("\\s+", long, "_").len(), 9000)
+  t.eq(re.find("a.*?c", "a" + "b".repeat(5000) + "c").text.len(), 5002)
+  t.ok(re.test("^(a|b)*$", "ab".repeat(30)))
+})
+
 t.run()

@@ -23,13 +23,27 @@ jobs:
         working-directory: native
         run: |
           mkdir -p bin
-          if [ "$RUNNER_OS" = "Windows" ]; then gcc -O2 -std=c11 -o bin/${{ matrix.out }} dist/faxal.c; else cc -O2 -std=c11 -o bin/${{ matrix.out }} dist/faxal.c -lm; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then gcc -O2 -std=c11 -o bin/${{ matrix.out }} dist/faxal.c -lws2_32; else cc -O2 -std=c11 -o bin/${{ matrix.out }} dist/faxal.c -lm; fi
           cp bin/${{ matrix.out }} ../${{ matrix.name }}
       - uses: actions/upload-artifact@v4
         with: { name: "${{ matrix.name }}", path: "${{ matrix.name }}" }
 
+  vscode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Package the VS Code extension
+        working-directory: editors/vscode
+        run: |
+          npm install --no-audit --no-fund
+          npx --yes @vscode/vsce package --allow-missing-repository --skip-license -o ../../faxal-vscode.vsix
+      - uses: actions/upload-artifact@v4
+        with: { name: faxal-vscode.vsix, path: faxal-vscode.vsix }
+
   publish:
-    needs: build
+    needs: [build, vscode]
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:

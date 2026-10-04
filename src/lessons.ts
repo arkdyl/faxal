@@ -55,9 +55,9 @@ export const LESSONS: Lesson[] = [
   {
     id: "functions", title: "Functions",
     text: [
-      "<code>fn</code> names a piece of code you can reuse. Parameters can have defaults. A short function can be written with an arrow: <code>fn(x) => x * 2</code>. Functions are values, and they remember the variables around them (closures).",
+      "<code>fn</code> names a piece of code you can reuse. Parameters can have defaults. A short function can be written with an arrow: <code>fn(x) => x * 2</code>. Functions are values, and they remember the variables around them (closures). Arguments can be passed by name: <code>greet(\"Cy\", greeting = \"Hi\")</code>.",
     ],
-    code: `fn greet(name, greeting = "Hello") {\n  return f"{greeting}, {name}!"\n}\nprint(greet("Ada"), greet("Bo", "Hi"))\n\nfn counter() {\n  let n = 0\n  return fn() { n += 1; return n }\n}\nlet next = counter()\nnext(); next()\nprint(next())\n\nprint([1, 2, 3] |> fn(l) => l.map(fn(x) => x * x))`,
+    code: `fn greet(name, greeting = "Hello") {\n  return f"{greeting}, {name}!"\n}\nprint(greet("Ada"), greet("Bo", "Hi"), greet("Cy", greeting = "Hey"))\n\nfn counter() {\n  let n = 0\n  return fn() { n += 1; return n }\n}\nlet next = counter()\nnext(); next()\nprint(next())\n\nprint([1, 2, 3] |> fn(l) => l.map(fn(x) => x * x))`,
     task: "Write <code>fn area(w, h = w)</code> that returns the area of a rectangle (a square if you give one number).",
   },
   {

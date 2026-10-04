@@ -48,6 +48,8 @@
 #include <time.h>
 
 #ifdef FX_WINDOWS
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
   #include <windows.h>
   #include <io.h>
   #include <direct.h>
@@ -81,6 +83,12 @@
   #include <sys/stat.h>
   #include <sys/time.h>
   #include <sys/wait.h>
+  #include <sys/select.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <netdb.h>
+  #include <fcntl.h>
+  #include <signal.h>
   #ifdef __APPLE__
     #include <mach-o/dyld.h>
   #endif
@@ -271,6 +279,74 @@ static inline char** fx_list_dir(const char* path, int* count) {
   if (!names) names = (char**)malloc(sizeof(char*));   /* never return NULL for an empty directory */
   *count = n;
   return names;
+}
+
+
+/* ------------------------------------------------------------------ sockets
+ * Plain TCP, used by the `net` library. Windows needs WSAStartup, closesocket and ioctlsocket instead. */
+#ifdef FX_WINDOWS
+typedef SOCKET fx_socket;
+#define FX_BAD_SOCKET INVALID_SOCKET
+#else
+typedef int fx_socket;
+#define FX_BAD_SOCKET (-1)
+#endif
+
+static inline void fx_net_init(void) {
+  static bool done = false;
+  if (done) return;
+  done = true;
+#ifdef FX_WINDOWS
+  WSADATA d; WSAStartup(MAKEWORD(2, 2), &d);
+#else
+  signal(SIGPIPE, SIG_IGN);      /* writing to a closed connection is an error value, not a crash */
+#endif
+}
+
+static inline void fx_net_close(fx_socket s) {
+#ifdef FX_WINDOWS
+  closesocket(s);
+#else
+  close(s);
+#endif
+}
+
+static inline const char* fx_net_error(void) {
+#ifdef FX_WINDOWS
+  static char buf[128];
+  snprintf(buf, sizeof buf, "network error %d", (int)WSAGetLastError());
+  return buf;
+#else
+  return strerror(errno);
+#endif
+}
+
+static inline bool fx_net_would_block(void) {
+#ifdef FX_WINDOWS
+  int e = WSAGetLastError();
+  return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS;
+#else
+  return errno == EINPROGRESS || errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR;
+#endif
+}
+
+static inline void fx_net_blocking(fx_socket s, bool blocking) {
+#ifdef FX_WINDOWS
+  u_long mode = blocking ? 0 : 1; ioctlsocket(s, FIONBIO, &mode);
+#else
+  int fl = fcntl(s, F_GETFL, 0); fcntl(s, F_SETFL, blocking ? (fl & ~O_NONBLOCK) : (fl | O_NONBLOCK));
+#endif
+}
+
+/* Waits until the socket can be read (or written), at most `seconds` (0 = just look). 1 = ready, 0 = not yet, -1 = error. */
+static inline int fx_net_wait(fx_socket s, bool forWrite, double seconds) {
+#ifndef FX_WINDOWS
+  if (s >= FD_SETSIZE) return -1;
+#endif
+  fd_set set; FD_ZERO(&set); FD_SET(s, &set);
+  struct timeval tv; tv.tv_sec = (long)seconds; tv.tv_usec = (long)((seconds - (double)(long)seconds) * 1e6);
+  int r = select((int)s + 1, forWrite ? NULL : &set, forWrite ? &set : NULL, NULL, &tv);
+  return r < 0 ? -1 : r > 0 ? 1 : 0;
 }
 
 #endif

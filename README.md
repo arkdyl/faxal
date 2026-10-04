@@ -73,14 +73,14 @@ The one-line installers download the program for your system from the latest [re
 ## What the language has
 
 - numbers, strings (UTF-8, `f"..."` interpolation), booleans, `nil`, lists, ordered maps, ranges (`0..10 by 2`)
-- functions as values, closures, recursion, default parameters, short arrow functions `fn(x) => x * 2`
+- functions as values, closures, recursion, default and **named** parameters (`box(3, label = "big")`), short arrow functions `fn(x) => x * 2`
 - optional types that are checked at run time: `fn area(w: num, h: num) -> num`
 - coroutines and generators (`yield`, `resume`, `for x in coroutine(...)`), and `async fn` / `await` with a task scheduler in `std/tasks` (sleep, gather, timeout, channels)
 - classes with `init`, `self`, `extends`, `super`, and `to_str` for printing
 - `if` / `while` / `for … in`, `break`, `continue`; `try` / `catch` / `throw` with stack traces
 - pipes `x |> f(a)`, default values `a ?? b`, safe access `a?.b`
 - modules (`import`), packages, a standard library, and compiled bytecode files (`.fxc`)
-- a standard library with regular expressions, dates, paths, CSV, random, collections and more
+- a standard library with regular expressions, dates, paths, CSV, random, collections, an HTTP client and server, encodings and more
 - friendly errors that suggest fixes (`Did you mean 'print'?`)
 - built-in drawing: turtle, circles, rectangles, text, SVG export
 
@@ -97,6 +97,13 @@ Faxal builds a lot of itself. These are Faxal programs, built into the `faxal` e
 | `native/tools/embed.fx` | compiles the files above to bytecode and builds them into the executable (`native/src/embedded.c`, `make embed`), so faxal builds its own library |
 
 **The compiler is written in Faxal too, and it is the default.** `std/compiler` is a complete port of the C compiler that produces exactly the same bytecode and error messages. It is built into the `faxal` executable as precompiled bytecode (`make embed`), so faxal starts in under 10 ms and compiles everything you run with it, the standard library and tools included. The C compiler is still there: it bootstraps the build, it is the reference the Faxal one is tested against, and `--c-compiler` uses it. The virtual machine, garbage collector and built-in functions are C. See [docs/DESIGN.md](docs/DESIGN.md).
+
+## Programs written in Faxal
+
+- [`apps/mdsite`](apps/mdsite): a Markdown static-site generator. `faxal apps/mdsite/main.fx docs public` builds this repository's documentation into a website (`--serve 8000` previews it).
+- [`apps/notes`](apps/notes): a notes web app. `faxal apps/notes/main.fx` serves a page and a REST API on http://127.0.0.1:8080, saving to a JSON file. It uses `std/http`, `std/tasks`, optional types, named arguments and classes.
+
+Both have tests: `faxal test apps`.
 
 ## The website
 

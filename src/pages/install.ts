@@ -30,7 +30,7 @@ const OS = {
       ["Install (PowerShell; downloads the latest release)", "irm https://raw.githubusercontent.com/arkdyl/faxal/main/install.ps1 | iex"],
       ["Check it works (in a new terminal)", "faxal --version\nfaxal -e 'print(\"hello from faxal\")'"],
     ],
-    by_hand: "git clone https://github.com/arkdyl/faxal faxal; cd faxal\ngcc -O2 -o faxal.exe native/dist/faxal.c\n.\\faxal.exe --version",
+    by_hand: "git clone https://github.com/arkdyl/faxal faxal; cd faxal\ngcc -O2 -o faxal.exe native/dist/faxal.c -lws2_32\n.\\faxal.exe --version",
     where: "<code>%LOCALAPPDATA%\\faxal\\bin\\faxal.exe</code>, which the installer adds to your PATH.",
     status: "Supported: every change is built and tested on Windows by CI, though it has had less everyday use than macOS.",
   },

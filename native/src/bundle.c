@@ -225,7 +225,11 @@ static int buildC(Buffer* payload, const char* outPath, bool compile) {
   char command[PATH_MAX * 4];
   for (int i = cc ? -1 : 0; i < 3; i++) {
     const char* compiler = i < 0 ? cc : tries[i];
+    #ifdef FX_WINDOWS
+    snprintf(command, sizeof command, "%s -O2 -o \"%s\" \"%s\" -lws2_32", compiler, exePath, cPath);
+#else
     snprintf(command, sizeof command, "%s -O2 -o \"%s\" \"%s\" -lm", compiler, exePath, cPath);
+#endif
     FILE* p = fx_popen(command);
     if (!p) continue;
     char line[512]; Buffer msgs; bufInit(&msgs);

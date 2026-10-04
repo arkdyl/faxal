@@ -51,6 +51,20 @@ static ObjFunction* loadProgram(Value tree, ObjModule* module) {
     if (!field(fm, "script", &x) || !IS_BOOL(x)) goto bad;
     f->isScript = AS_BOOL(x);
 
+    /* optional: the names of the parameters, for named arguments */
+    if (field(fm, "params", &x) && IS_LIST(x)) {
+      ObjList* names = AS_LIST(x);
+      if (names->count != f->arity) goto bad;
+      if (f->arity > 0) {
+        f->paramNames = ALLOCATE(ObjString*, f->arity);
+        for (int k = 0; k < f->arity; k++) f->paramNames[k] = NULL;
+        for (int k = 0; k < f->arity; k++) {
+          if (!IS_STRING(names->items[k])) goto bad;
+          f->paramNames[k] = AS_STRING(names->items[k]);
+        }
+      }
+    }
+
     Value code, lines, consts;
     if (!field(fm, "code", &code) || !IS_LIST(code) || !field(fm, "lines", &lines) || !IS_LIST(lines) ||
         AS_LIST(code)->count != AS_LIST(lines)->count || !field(fm, "constants", &consts) || !IS_LIST(consts)) goto bad;

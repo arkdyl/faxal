@@ -109,7 +109,11 @@ static Token scanString(char quote, bool interp) {
   while (*scanner.current) {
     char c = *scanner.current;
     if (c == quote && braceDepth == 0) break;
-    if (c == '\\' && scanner.current[1]) { scanner.current += 2; continue; }
+    if (c == '\\' && scanner.current[1]) {
+      if (scanner.current[1] == '\n') { scanner.line++; scanner.lineStart = scanner.current + 2; }   /* an escaped line break is still a line */
+      scanner.current += 2;
+      continue;
+    }
     if (!interp) { /* plain string: braces mean nothing */ }
     else if (c == '{') braceDepth++;
     else if (c == '}' && braceDepth > 0) braceDepth--;
@@ -743,8 +747,72 @@ static uint8_t argumentList(void) {
   return (uint8_t)argc;
 }
 
+/* Named arguments: f(1, width = 3). Before the arguments are compiled, a look ahead (on a copy of the scanner)
+   finds out whether there are any and what they are called, because the code that calls f has to be set up
+   differently:   f(a, w = 3)   becomes   __call_named(f, "w", a, 3)   and the VM matches the names to parameters. */
+typedef struct { int count; char names[512]; } NamedArgs;
+
+static void scanNamedArgs(NamedArgs* na) {
+  na->count = 0; na->names[0] = '\0';
+  Scanner saved = scanner;
+  Token t = parser.current, nextTok;
+  int depth = 0;
+  bool argStart = true;
+  size_t used = 0;
+  for (int guard = 0; guard < 100000; guard++) {
+    if (t.type == T_EOF || t.type == T_ERROR) break;
+    if (t.type == T_LPAREN || t.type == T_LBRACKET || t.type == T_LBRACE) depth++;
+    else if (t.type == T_RPAREN || t.type == T_RBRACKET || t.type == T_RBRACE) { if (depth == 0) break; depth--; }
+    if (depth == 0 && argStart && t.type == T_IDENT) {
+      nextTok = scanToken();
+      if (nextTok.type == T_EQ) {
+        if (used + (size_t)t.length + 2 < sizeof na->names) {
+          if (na->count) na->names[used++] = ',';
+          memcpy(na->names + used, t.start, (size_t)t.length); used += (size_t)t.length; na->names[used] = '\0';
+        }
+        na->count++;
+      }
+      argStart = false;
+      t = nextTok;
+      continue;
+    }
+    if (depth == 0) argStart = t.type == T_COMMA;
+    t = scanToken();
+  }
+  scanner = saved;
+}
+
+/* The callee is on the stack and '(' has been read. */
+static void namedCall(NamedArgs* na) {
+  Token g = { T_IDENT, "__call_named", 12, 0, NULL };
+  emitByte(OP_GET_GLOBAL); emitShort(identifierConstant(&g));
+  emitByte(OP_SWAP);
+  emitConstant(OBJ_VAL(newString(na->names, (int)strlen(na->names))));
+  int argc = 0;
+  bool named = false;
+  if (!check(T_RPAREN)) {
+    do {
+      if (check(T_RPAREN)) break;
+      if (check(T_IDENT) && peekNext().type == T_EQ) {
+        advance(); advance();
+        named = true;
+        expression();
+      } else {
+        if (named) error("A positional argument can't come after a named argument.");
+        expression();
+      }
+      if (argc >= 253) error("Can't have more than 253 arguments in a call with named arguments.");
+      argc++;
+    } while (match(T_COMMA));
+  }
+  consume(T_RPAREN, "Expected ')' after arguments.");
+  emitBytes(OP_CALL, (uint8_t)(2 + argc));
+}
+
 static void call(bool canAssign) {
   (void)canAssign;
+  NamedArgs na; scanNamedArgs(&na);
+  if (na.count > 0) { namedCall(&na); return; }
   uint8_t argc = argumentList();
   emitBytes(OP_CALL, argc);
 }
@@ -763,6 +831,8 @@ static void dot(bool canAssign) {
     emitByte(compound);
     emitByte(OP_SET_PROPERTY); emitShort(name);
   } else if (match(T_LPAREN)) {
+    NamedArgs na; scanNamedArgs(&na);
+    if (na.count > 0) { emitByte(OP_GET_PROPERTY); emitShort(name); namedCall(&na); return; }
     uint8_t argc = argumentList();
     emitByte(OP_INVOKE); emitShort(name); emitByte(argc);
   } else {
@@ -855,6 +925,7 @@ static void function(FunctionType type, Token* name, bool isAsync) {
   beginScope();
   consume(T_LPAREN, "Expected '(' before parameters.");
   bool sawDefault = false;
+  ObjString* paramNames[256];
   if (!check(T_RPAREN)) {
     do {
       if (check(T_RPAREN)) break;
@@ -863,6 +934,7 @@ static void function(FunctionType type, Token* name, bool isAsync) {
       int p = parseVariable("Expected a parameter name.");
       defineVariable(p);
       Token paramName = parser.previous;
+      if (current->function->arity <= 255) paramNames[current->function->arity - 1] = newString(paramName.start, paramName.length);
       char paramSpec[96]; paramSpec[0] = '\0';
       if (match(T_COLON)) typeSpec(paramSpec, sizeof paramSpec);
       if (match(T_EQ)) {
@@ -893,6 +965,11 @@ static void function(FunctionType type, Token* name, bool isAsync) {
     } while (match(T_COMMA));
   }
   consume(T_RPAREN, "Expected ')' after parameters.");
+  if (current->function->arity > 0 && current->function->arity <= 255) {   /* kept so that named arguments can find them */
+    int n = current->function->arity;
+    current->function->paramNames = ALLOCATE(ObjString*, n);
+    for (int i = 0; i < n; i++) current->function->paramNames[i] = paramNames[i];
+  }
   if (match(T_RARROW)) typeSpec(current->retSpec, sizeof current->retSpec);
   /* async fn f(x) { body }  is   fn f(x) { return __coroutine(fn() { body }) }: calling it gives a coroutine
      that has not started yet (the body can use the parameters because it is a closure) */
@@ -965,6 +1042,8 @@ static void pipeOp(bool canAssign) {
   emitByte(OP_SWAP);                             /* stack: value, function  ->  function, value */
   int argc = 1;
   if (match(T_LPAREN)) {
+    NamedArgs na; scanNamedArgs(&na);
+    if (na.count > 0) error("Named arguments aren't supported after '|>': call the function with ( ) instead.");
     int extra = argumentList();
     if (extra + 1 > 255) error("Too many arguments.");
     argc += extra;
@@ -988,8 +1067,12 @@ static void optionalDot(bool canAssign) {
   consume(T_IDENT, "Expected a property name after '?.'.");
   int name = identifierConstant(&parser.previous);
   if (match(T_LPAREN)) {
-    uint8_t argc = argumentList();
-    emitByte(OP_INVOKE); emitShort(name); emitByte(argc);
+    NamedArgs na; scanNamedArgs(&na);
+    if (na.count > 0) { emitByte(OP_GET_PROPERTY); emitShort(name); namedCall(&na); }
+    else {
+      uint8_t argc = argumentList();
+      emitByte(OP_INVOKE); emitShort(name); emitByte(argc);
+    }
   } else {
     emitByte(OP_GET_PROPERTY); emitShort(name);
   }
@@ -1016,6 +1099,13 @@ static void super_(bool canAssign) {
   int name = identifierConstant(&parser.previous);
   namedVariable(syntheticToken("self"), false);
   if (match(T_LPAREN)) {
+    NamedArgs na; scanNamedArgs(&na);
+    if (na.count > 0) {
+      namedVariable(syntheticToken("super"), false);
+      emitByte(OP_GET_SUPER); emitShort(name);
+      namedCall(&na);
+      return;
+    }
     uint8_t argc = argumentList();
     namedVariable(syntheticToken("super"), false);
     emitByte(OP_SUPER_INVOKE); emitShort(name); emitByte(argc);

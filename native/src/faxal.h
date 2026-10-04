@@ -10,7 +10,7 @@
 #include <string.h>
 #include <stdarg.h>
 
-#define FAXAL_VERSION "1.0.0"
+#define FAXAL_VERSION "1.1.0"
 #define FRAMES_MAX 1500
 #define STACK_MAX (FRAMES_MAX * 256)
 #define HANDLERS_MAX 256
@@ -103,7 +103,8 @@ typedef struct {
 typedef struct { uint8_t* code; int* lines; int count; int capacity; ValueArray constants; } Chunk;
 
 struct ObjString { Obj obj; int length; uint32_t hash; char chars[]; };
-struct ObjFunction { Obj obj; int arity; int minArity; int upvalueCount; Chunk chunk; ObjString* name; ObjModule* module; bool isScript; };
+struct ObjFunction { Obj obj; int arity; int minArity; int upvalueCount; Chunk chunk; ObjString* name; ObjModule* module; bool isScript;
+  ObjString** paramNames; /* the names of the `arity` parameters (for named arguments), or NULL when unknown */ };
 struct ObjUpvalue { Obj obj; Value* location; Value closed; struct ObjUpvalue* next; };
 struct ObjClosure { Obj obj; ObjFunction* function; ObjUpvalue** upvalues; int upvalueCount; };
 typedef bool (*NativeFn)(int argc, Value* args, Value* out);

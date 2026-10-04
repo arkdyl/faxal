@@ -21,7 +21,7 @@ jobs:
         working-directory: native
         run: |
           mkdir -p bin
-          if [ "$RUNNER_OS" = "Windows" ]; then gcc -O2 -std=c11 -o bin/faxal.exe dist/faxal.c; else cc -O2 -std=c11 -o bin/faxal dist/faxal.c -lm; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then gcc -O2 -std=c11 -o bin/faxal.exe dist/faxal.c -lws2_32; else cc -O2 -std=c11 -o bin/faxal dist/faxal.c -lm; fi
 
       - name: Standard library tests
         working-directory: native

@@ -46,7 +46,11 @@ class Timer { fn init(until) { self.until = until } }
 class Gather { fn init(items) { self.items = items } }
 class Timeout { fn init(what, seconds) { self.what = what; self.seconds = seconds } }
 # Things a task can wait for by polling: poll() gives nil while not ready, or [value] when ready.
-class Pollable { }
+# external() says the thing depends on the outside world (a network connection): the scheduler then keeps
+# polling instead of reporting a deadlock.
+class Pollable {
+  fn external() => false
+}
 
 class Recv extends Pollable {
   fn init(channel) { self.channel = channel }
@@ -221,14 +225,29 @@ fn _step(task, value, is_error) {
   if status(task.co) == "done" { _finish(task, req) } else { _dispatch(task, req) }
 }
 
+fn _has_external() {
+  for p in _loop.pollers {
+    if p.wait.external() { return true }
+  }
+  return false
+}
+
 fn _wake_timers() {
   let lp = _loop
-  if len(lp.timers) == 0 { return false }
+  let external = _has_external()
+  if len(lp.timers) == 0 {
+    if external { if time.sleep != nil { time.sleep(0.002) }; return true }
+    return false
+  }
   let first = 0
   for i in 1..len(lp.timers) {
     if lp.timers[i].at < lp.timers[first].at { first = i }
   }
   let wait = lp.timers[first].at - lp.now()
+  if external and wait > 0.002 {
+    if time.sleep != nil { time.sleep(0.002) }
+    return true
+  }
   if wait > 0 {
     if time.sleep != nil and not lp.virtual { time.sleep(wait) } else { lp.skew += wait }
   }

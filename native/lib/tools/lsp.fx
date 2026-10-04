@@ -12,6 +12,9 @@
 import "std/compiler" as compiler
 import "std/fmt" as fmt
 import "std/lex" as lex
+import "std/analyze" as an
+import "std/path" as path
+import "std/encoding" as enc
 
 let docs = {}          # uri -> the current text
 let shutting_down = false
@@ -258,6 +261,214 @@ fn formatting(uri) {
   }]
 }
 
+# ------------------------------------------------- names: definition, references, rename
+
+let cache = {}         # uri -> {text, analysis}
+
+fn analysis(uri) {
+  let text = docs[uri] ?? ""
+  let hit = cache.get(uri)
+  if hit != nil and hit.text == text { return hit.analysis }
+  let a = an.analyze(text)
+  cache[uri] = {text: text, analysis: a}
+  return a
+}
+
+fn tok_range(t) {
+  return {start: {line: t.line - 1, character: t.col - 1}, end: {line: t.line - 1, character: t.col - 1 + len(t.text)}}
+}
+
+fn uri_to_path(uri) {
+  let p = uri.starts_with("file://") and uri[7:] or uri
+  return enc.url_decode(p, false)
+}
+
+fn path_to_uri(p) => "file://" + enc.url_encode(p).replace("%2F", "/").replace("%3A", ":")
+
+# The file an `import "x"` points at (nil for the built-in std/ modules and for files that don't exist).
+fn import_file(uri, rel) {
+  if rel.starts_with("std/") { return nil }
+  let dir = path.dirname(uri_to_path(uri))
+  for ext in ["", ".fx", ".fxc"] {
+    let candidate = rel.starts_with("/") and rel + ext or path.join(dir, rel + ext)
+    if fs.exists(candidate) and not fs.is_dir(candidate) { return candidate }
+  }
+  return nil
+}
+
+# Reads a file on disk (or the open document) and analyses it.
+fn analysis_of_file(file) {
+  let uri = path_to_uri(file)
+  if docs.has(uri) { return {uri: uri, analysis: analysis(uri)} }
+  if not file.ends_with(".fx") { return nil }
+  let text = fs.read(file)
+  return {uri: uri, analysis: an.analyze(text)}
+}
+
+fn definition(uri, pos) {
+  let a = analysis(uri)
+  let idx = an.token_at(a, pos.line + 1, pos.character + 1)
+  if idx == nil { return nil }
+  let tok = a.toks[idx]
+  if tok.kind == "string" and idx > 0 and a.toks[idx - 1].kind == "keyword" and a.toks[idx - 1].text == "import" {
+    let file = import_file(uri, tok.text[1:len(tok.text) - 1])
+    if file == nil { return nil }
+    return {uri: path_to_uri(file), range: {start: {line: 0, character: 0}, end: {line: 0, character: 0}}}
+  }
+  if tok.kind != "ident" { return nil }
+  let r = an.resolve(a, idx)
+  if r.decl != nil { return {uri: uri, range: tok_range(a.toks[r.decl.tok])} }
+  if not r.member { return nil }
+  let found = []
+  # obj.name where obj is an imported module: the declaration in that file
+  let ref = nil
+  for x in a.refs { if x.tok == idx { ref = x } }
+  if ref != nil and ref.after != nil {
+    for d in a.decls {
+      if d.kind == "module" and d.name == ref.after and d.path != nil {
+        let file = import_file(uri, d.path)
+        let other = file != nil and analysis_of_file(file) or nil
+        if other != nil {
+          for od in other.analysis.decls {
+            if od.name == r.name and not od.member and (od.kind == "function" or od.kind == "class" or od.kind == "variable") {
+              found.push({uri: other.uri, range: tok_range(other.analysis.toks[od.tok])})
+            }
+          }
+        }
+      }
+    }
+  }
+  if len(found) == 0 {
+    for d in a.decls { if d.member and d.name == r.name { found.push({uri: uri, range: tok_range(a.toks[d.tok])}) } }
+  }
+  if len(found) == 0 { return nil }
+  return len(found) == 1 and found[0] or found
+}
+
+fn references(uri, pos, include_declaration = true) {
+  let a = analysis(uri)
+  let idx = an.token_at(a, pos.line + 1, pos.character + 1)
+  if idx == nil or a.toks[idx].kind != "ident" { return [] }
+  let r = an.resolve(a, idx)
+  let out = []
+  for u in r.uses {
+    let is_decl = false
+    for d in a.decls { if d.tok == u { is_decl = true } }
+    if is_decl and not include_declaration { continue }
+    out.push({uri: uri, range: tok_range(a.toks[u])})
+  }
+  return out
+}
+
+fn highlights(uri, pos) {
+  let a = analysis(uri)
+  let idx = an.token_at(a, pos.line + 1, pos.character + 1)
+  if idx == nil or a.toks[idx].kind != "ident" { return [] }
+  return an.resolve(a, idx).uses.map(fn(u) => {range: tok_range(a.toks[u]), kind: 1})
+}
+
+fn is_valid_name(name) {
+  if name == "" or KEYWORDS.contains(name) { return false }
+  let first = name[0]
+  if not ((first >= "a" and first <= "z") or (first >= "A" and first <= "Z") or first == "_") { return false }
+  for c in name.chars() { if not _is_word_char(c) { return false } }
+  return true
+}
+
+# The range that would be renamed, or nil
+fn prepare_rename(uri, pos) {
+  let a = analysis(uri)
+  let idx = an.token_at(a, pos.line + 1, pos.character + 1)
+  if idx == nil or a.toks[idx].kind != "ident" { return nil }
+  let r = an.resolve(a, idx)
+  if r.decl == nil and not r.member { return nil }       # a built-in or a global from somewhere else
+  return {range: tok_range(a.toks[idx]), placeholder: a.toks[idx].text}
+}
+
+fn rename(uri, pos, new_name) {
+  if not is_valid_name(new_name) { throw "'" + new_name + "' is not a valid name" }
+  let a = analysis(uri)
+  let idx = an.token_at(a, pos.line + 1, pos.character + 1)
+  if idx == nil or a.toks[idx].kind != "ident" { throw "put the cursor on a name to rename it" }
+  let r = an.resolve(a, idx)
+  if r.decl == nil and not r.member { throw "'" + r.name + "' is built in or declared in another file, so it can't be renamed here" }
+  let edits = r.uses.map(fn(u) => {range: tok_range(a.toks[u]), newText: new_name})
+  let changes = {}
+  changes[uri] = edits
+  return {changes: changes}
+}
+
+# The function being called around the cursor: signature, its parameters, and which one is being typed
+fn signature_help(uri, pos) {
+  let a = analysis(uri)
+  let at = an.token_at(a, pos.line + 1, pos.character + 1)
+  let i = at
+  if i == nil {
+    # between tokens (for example right after "(" or ","): the last token before the cursor
+    i = -1
+    for k in 0..len(a.toks) {
+      let t = a.toks[k]
+      if t.kind != "eof" and (t.line < pos.line + 1 or (t.line == pos.line + 1 and t.col + len(t.text) <= pos.character + 1)) { i = k }
+    }
+  }
+  if i < 0 { return nil }
+  let depth = 0
+  let commas = 0
+  let open = nil
+  let k = i
+  # when the cursor is on "(" itself it is not inside the call yet
+  while k >= 0 {
+    let t = a.toks[k]
+    if t.kind == "punct" and (t.text == ")" or t.text == "]" or t.text == "}") { depth += 1 }
+    else if t.kind == "punct" and (t.text == "(" or t.text == "[" or t.text == "{") {
+      if depth == 0 { if t.text == "(" and not (k == i and at != nil) { open = k }; if open != nil or t.text != "(" { break } }
+      else { depth -= 1 }
+    } else if depth == 0 and t.kind == "punct" and t.text == "," { commas += 1 }
+    k -= 1
+  }
+  if open == nil or open == 0 { return nil }
+  let callee = a.toks[open - 1]
+  if callee.kind != "ident" { return nil }
+  let target = nil
+  for x in a.refs { if x.tok == open - 1 and x.decl != nil { target = a.decls[x.decl] } }
+  if target == nil {
+    for d in a.decls { if d.name == callee.text and (d.kind == "function" or d.kind == "method" or d.kind == "class") { target = d } }
+  }
+  if target == nil { return nil }
+  let params = target.params
+  let label = target.detail
+  if target.kind == "class" {
+    for d in a.decls { if d.kind == "method" and d.name == "init" and d.line > target.line { params = d.params; label = "class " + target.name + d.detail[len("fn init"):]; break } }
+  }
+  if params == nil { return nil }
+  # a named argument being typed selects its parameter
+  let active = commas
+  let first = open + 1
+  let j = open + 1
+  let seen = 0
+  while j <= i and seen < commas { if a.toks[j].kind == "punct" and a.toks[j].text == "," and true { seen += 1; first = j + 1 }; j += 1 }
+  if first + 1 <= i and a.toks[first].kind == "ident" and a.toks[first + 1].kind == "op" and a.toks[first + 1].text == "=" {
+    for p in 0..len(params) { if params[p] == a.toks[first].text { active = p } }
+  }
+  return {signatures: [{label: label, parameters: params.map(fn(p) => {label: p})}], activeSignature: 0, activeParameter: active}
+}
+
+fn workspace_symbols(query) {
+  let out = []
+  let q = query.lower()
+  for uri in docs.keys() {
+    for d in analysis(uri).decls {
+      if d.kind == "param" or d.kind == "loop" or d.kind == "catch" { continue }
+      if q == "" or d.name.lower().contains(q) {
+        let a = analysis(uri)
+        let kinds = {"function": 12, "method": 6, "class": 5, "variable": 13, "module": 2}
+        out.push({name: d.name, kind: kinds.get(d.kind, 13), location: {uri: uri, range: tok_range(a.toks[d.tok])}})
+      }
+    }
+  }
+  return out
+}
+
 # -------------------------------------------------------------------- loop
 
 fn handle(msg) {
@@ -272,8 +483,14 @@ fn handle(msg) {
         hoverProvider: true,
         documentFormattingProvider: true,
         documentSymbolProvider: true,
+        definitionProvider: true,
+        referencesProvider: true,
+        documentHighlightProvider: true,
+        renameProvider: {prepareProvider: true},
+        signatureHelpProvider: {triggerCharacters: ["(", ","]},
+        workspaceSymbolProvider: true,
       },
-      serverInfo: {name: "faxal", version: "1.0.0"},
+      serverInfo: {name: "faxal", version: "1.1.0"},
     })
   } else if method == "shutdown" {
     shutting_down = true
@@ -289,6 +506,7 @@ fn handle(msg) {
     publish_diagnostics(params.textDocument.uri)
   } else if method == "textDocument/didClose" {
     docs.remove(params.textDocument.uri)
+    cache.remove(params.textDocument.uri)
     notify("textDocument/publishDiagnostics", {uri: params.textDocument.uri, diagnostics: []})
   } else if method == "textDocument/completion" {
     reply(id, completion(params.textDocument.uri, params.position))
@@ -296,6 +514,23 @@ fn handle(msg) {
     reply(id, hover(params.textDocument.uri, params.position))
   } else if method == "textDocument/documentSymbol" {
     reply(id, document_symbols(params.textDocument.uri))
+  } else if method == "textDocument/definition" {
+    reply(id, definition(params.textDocument.uri, params.position))
+  } else if method == "textDocument/references" {
+    reply(id, references(params.textDocument.uri, params.position, (params.context ?? {}).includeDeclaration ?? true))
+  } else if method == "textDocument/documentHighlight" {
+    reply(id, highlights(params.textDocument.uri, params.position))
+  } else if method == "textDocument/prepareRename" {
+    let r = prepare_rename(params.textDocument.uri, params.position)
+    if r == nil { reply_error(id, -32602, "there is nothing here that can be renamed") } else { reply(id, r) }
+  } else if method == "textDocument/rename" {
+    let edit = nil
+    try { edit = rename(params.textDocument.uri, params.position, params.newName) } catch e { reply_error(id, -32602, str(e)); return }
+    reply(id, edit)
+  } else if method == "textDocument/signatureHelp" {
+    reply(id, signature_help(params.textDocument.uri, params.position))
+  } else if method == "workspace/symbol" {
+    reply(id, workspace_symbols(params.query ?? ""))
   } else if method == "textDocument/formatting" {
     reply(id, formatting(params.textDocument.uri))
   } else if id != nil {

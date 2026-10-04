@@ -10,7 +10,7 @@ irm https://raw.githubusercontent.com/arkdyl/faxal/main/install.ps1 | iex       
 There is nothing else to set up. To build by hand, the whole runtime is one C file, so this is the entire build on any system:
 
 ```bash
-cc -O2 -o faxal native/dist/faxal.c -lm     # Windows with MinGW: gcc -O2 -o faxal.exe native/dist/faxal.c
+cc -O2 -o faxal native/dist/faxal.c -lm     # Windows with MinGW: gcc -O2 -o faxal.exe native/dist/faxal.c -lws2_32 -lws2_32
 ./faxal --version
 ```
 
@@ -100,6 +100,7 @@ Indexing and slicing work on bytes: `s[0]`, `s[-1]`, `s[2:5]`, `s[:3]`, `s[3:]`.
 | `s.lstrip()` `s.rstrip()` `s.capitalize()` | new string |
 | `s.is_digit()` `s.is_alpha()` `s.is_empty()` | bool |
 | `s.size()` | length in characters (`len` counts bytes) |
+| `s.bytes()` | the bytes as a list of numbers (`from_bytes(list)` is the opposite) |
 
 ## Operators
 
@@ -161,6 +162,19 @@ fn add(a, b) { return a + b }
 let double = fn(x) { return x * 2 }     # an anonymous function is a value
 print(add(2, 3), double(4))
 ```
+
+Arguments can be passed **by name**, in any order, after the positional ones. This is clearest for functions with several optional parameters:
+
+```fx
+fn box(w, h = 2, label = "box", border = "#") {
+  return f"{label}: {w}x{h} {border}"
+}
+print(box(3, label = "big"))                 # big: 3x2 #
+print(box(5, border = "*", h = 9))           # box: 5x9 *
+print(box(h = 1, w = 4))                     # box: 4x1 #
+```
+
+It works for functions, methods (`obj.move(dy = 4)`, `super.init(x, y = y)`) and classes (`Point(y = 5, x = 1)`). A positional argument can't come after a named one, a name can only be given once, and built-in functions (`print`, `sqrt`, list methods) take no named arguments. Names after a pipe (`x |> f(b = 2)`) aren't supported.
 
 Short functions can use an arrow: `fn(x) => expression` is the same as `fn(x) { return expression }`. It works for named functions and methods too.
 

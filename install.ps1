@@ -39,7 +39,7 @@ if (-not $prebuilt) {
   if (-not $cc) { foreach ($c in "gcc", "clang", "cc") { if (Get-Command $c -ErrorAction SilentlyContinue) { $cc = $c; break } } }
   if (-not $cc) { throw "no C compiler found. Install MinGW-w64 (for example: winget install BrechtSanders.WinLibs.POSIX.UCRT) and run this again" }
   Say "compiling with $cc"
-  & $cc -O2 -std=c11 -o (Join-Path $bin "faxal.exe") $source
+  & $cc -O2 -std=c11 -o (Join-Path $bin "faxal.exe") $source -lws2_32
   if ($LASTEXITCODE -ne 0) { throw "the build failed" }
   Copy-Item $source (Join-Path $share "faxal.c") -Force
 }

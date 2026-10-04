@@ -1,11 +1,15 @@
 {
   "name": "faxal",
   "displayName": "Faxal",
-  "description": "Syntax highlighting for the Faxal programming language",
-  "version": "1.0.0",
+  "description": "The Faxal programming language: syntax highlighting, errors as you type, completion, go to definition, rename, formatting",
+  "version": "1.1.0",
   "publisher": "faxal",
-  "engines": { "vscode": "^1.60.0" },
-  "categories": ["Programming Languages"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/arkdyl/faxal" },
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages", "Formatters"],
+  "main": "./client/extension.js",
+  "activationEvents": ["onLanguage:faxal"],
   "contributes": {
     "languages": [
       {
@@ -21,6 +25,23 @@
         "scopeName": "source.faxal",
         "path": "./syntaxes/faxal.tmLanguage.json"
       }
+    ],
+    "configuration": {
+      "title": "Faxal",
+      "properties": {
+        "faxal.path": {
+          "type": "string",
+          "default": "faxal",
+          "description": "The faxal program to start as the language server (`faxal lsp`). Use a full path if faxal is not on your PATH."
+        }
+      }
+    },
+    "commands": [
+      { "command": "faxal.restartServer", "title": "Faxal: Restart the language server" },
+      { "command": "faxal.runFile", "title": "Faxal: Run this file" }
     ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }

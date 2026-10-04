@@ -66,11 +66,14 @@ print(json.decode(text).langs[0])   # Faxal
 | `os.run(command)` | runs a shell command, gives `{code, output}` |
 | `os.args` `os.script` `os.env(name)` `os.cwd()` `os.platform` | the program's surroundings (`"macos"`, `"linux"`, `"windows"`) |
 | `os.stdin_read(n)` `os.flush()` | read bytes from standard input / flush output |
+| `net.listen(port, host)` `net.port(server)` `net.accept(server, timeout)` | TCP: start listening (port `0` picks a free one) / the port it got / wait for a connection (`nil` after `timeout` seconds) |
+| `net.connect(host, port, timeout)` `net.read(conn, max, timeout)` `net.write(conn, text)` `net.close(conn)` | TCP client and data: `read` gives `""` when the other side closed and `nil` on a timeout. `std/http` is built on these |
 
 ## Strings, lists and maps
 
 Methods are listed in the language docs. A few more details:
 
+- `s.bytes()` gives the bytes of a string as a list of numbers 0 to 255, and `from_bytes(list)` makes a string from them (this is how `std/encoding` works).
 - Strings are UTF-8 bytes: `len` counts bytes, `s.size()` counts characters, and `for c in s` goes character by character.
 - `list.sort()` sorts in place and `sorted(list)` makes a sorted copy. Mixed numbers and strings need a comparison function: `sort(fn(a, b) => a.age - b.age)`.
 - Maps keep the order entries were added. Reading a missing key gives `nil`.
@@ -219,6 +222,57 @@ print(deck.len(), random.sample(deck, 2).len(), random.int(1, 6) <= 6)    # 5 2 
 
 `run spawn sleep gather timeout Channel` for `async fn` and `await`. See "Coroutines and async" in the language docs. `tasks.run(main, true)` uses a pretend clock only, so sleeping takes no time and tasks always finish in the same order (handy in tests).
 
+## std/http
+
+An HTTP/1.1 client and server written in Faxal on top of `net` (plain `http://` only: there is no TLS). Not available in safe mode.
+
+```fx
+import "std/http" as http
+import "std/tasks" as tasks
+
+let app = http.Router()
+app.get("/hello", fn(req) => http.text("Hello, " + (req.query.name ?? "you") + "!"))
+app.get("/notes/:id", fn(req) => http.send_json({id: req.params.id}))
+app.post("/echo", async fn(req) => http.send_json(req.json(), 201))
+
+async fn main() {
+  let port = nil
+  let server = tasks.spawn(http.serve_async(0, app, limit = 2, on_start = fn(p) { port = p }))
+  await nil
+  let base = "http://127.0.0.1:" + str(port)
+  print((await http.get_async(base + "/hello?name=Ada")).text())     # Hello, Ada!
+  print((await http.get_async(base + "/notes/42")).json().id)        # 42
+  await server
+}
+tasks.run(main())
+```
+
+| Client | |
+| --- | --- |
+| `get(url)` `head` `delete` | a `Response`: `status`, `reason`, `ok`, `headers` (lowercase names), `body`, `text()`, `json()`, `header(name)` |
+| `post(url, body, headers)` `put` `post_json(url, value)` | send a body |
+| `request(method, url, body, headers, timeout, redirects)` | the general form (follows up to 5 redirects; handles chunked bodies) |
+| `get_async(url)` `post_async` `request_async(...)` | the same for `await`: other tasks run while waiting |
+
+| Server | |
+| --- | --- |
+| `serve(port, handler, host, limit, on_start)` | one connection at a time. `handler` is a function `fn(req)` or a `Router`. Use port `0` to get a free port, `limit` stops after that many requests |
+| `serve_async(...)` | every connection is its own task, and handlers may be `async fn`s; start it with `tasks.run` |
+| `Router()` | `get post put delete add(method, pattern, handler)`: patterns like `/notes/:id` (`req.params.id`) and `/files/*` (`req.params.rest`); gives 404 and 405 for you |
+| `req` | `method path query headers body params`, plus `req.json()`, `req.form()`, `req.header(name)` |
+| handler results | a `Response`, text (HTML if it starts with `<`), a map or list (sent as JSON), or `nil` (204). An error in a handler becomes a 500 response |
+| `text(body, status)` `html` `send_json(value, status)` `redirect(url)` `status_only(404)` | build responses |
+
+## std/encoding
+
+`base64_encode` `base64_decode` `hex_encode` `hex_decode` `url_encode` `url_decode(text, plus)` `html_escape`. Text is handled as bytes (UTF-8), so any text round-trips.
+
+```fx
+import "std/encoding" as enc
+print(enc.base64_encode("héllo"), enc.url_encode("a b&c"), enc.hex_encode("hi"))   # aMOpbGxv a%20b%26c 6869
+print(enc.html_escape("<b>"), enc.url_decode("a%20b+c"))                          # &lt;b&gt; a b c
+```
+
 ## std/test
 
 The test framework behind `faxal test`: `test(name, fn)`, `eq(actual, expected)`, `ne`, `ok(condition)`, `close(a, b)`, `throws(fn, text)`, `fail(message)` and `run()`.
@@ -230,6 +284,6 @@ t.test("fails loudly", fn() { t.throws(fn() { throw "boom" }, "boom") })
 t.run()
 ```
 
-## std/lex, std/fmt, std/compiler, std/bytecode
+## std/lex, std/fmt, std/compiler, std/bytecode, std/analyze
 
-The tokenizer, formatter, compiler and bytecode tools that Faxal is built from. `lex.tokenize(source)` gives tokens, `fmt.format(source)` gives formatted code, `compiler.compile(source)` gives `{ok, program}` or `{ok: false, errors}` (each error has `message line col text length`). They are written in Faxal: read them in `native/lib/std/`.
+The tokenizer, formatter, compiler and bytecode tools that Faxal is built from. `std/analyze` finds the names in code and what they refer to (used by the language server for go to definition, references and rename): `analyze(source)` gives `decls` and `refs`, `resolve(a, token)` gives every use of a name. `lex.tokenize(source)` gives tokens, `fmt.format(source)` gives formatted code, `compiler.compile(source)` gives `{ok, program}` or `{ok: false, errors}` (each error has `message line col text length`). They are written in Faxal: read them in `native/lib/std/`.

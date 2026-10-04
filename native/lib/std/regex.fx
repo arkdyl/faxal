@@ -12,6 +12,8 @@
 # lookahead (?= ) (?! ), and backreferences \1..\9. A flag string of "i" ignores case.
 # Every function takes the pattern as a string or as the result of compile().
 # Positions count characters, not bytes. A match is a map with text, start, end, groups and named.
+# Repeating a single character (a+, [a-z]*, .*?) works on texts of any length; repeating a group, like (ab)*,
+# uses stack for every repetition, so it handles a few hundred repetitions at most.
 
 let _DIGIT = [["0", "9"]]
 let _WORD = [["a", "z"], ["A", "Z"], ["0", "9"], ["_", "_"]]
@@ -242,7 +244,40 @@ fn _match_at(re, cs, start, icase) {
       }
       return false
     }
-    if t == "rep" { return rep(node, 0, i, k) }
+    if t == "rep" {
+      # a repeated single character (a, ., [a-z]): count the run in a loop instead of recursing per character,
+      # so long texts don't run out of stack
+      let c = node.node.t
+      if c == "char" or c == "any" or c == "set" {
+        let inner = node.node
+        let count = 0
+        let j = i
+        while count < node.max and j < n {
+          let ch = cs[j]
+          let hit = false
+          if c == "char" { hit = same(ch, inner.c) } else if c == "any" { hit = ch != "\n" } else { hit = in_set(inner, ch) }
+          if not hit { break }
+          j += 1
+          count += 1
+        }
+        if count < node.min { return false }
+        if node.lazy {
+          let used = node.min
+          while used <= count {
+            if k(i + used) { return true }
+            used += 1
+          }
+        } else {
+          let used = count
+          while used >= node.min {
+            if k(i + used) { return true }
+            used -= 1
+          }
+        }
+        return false
+      }
+      return rep(node, 0, i, k)
+    }
     if t == "group" {
       if node.idx == nil { return m(node.node, i, k) }
       let g = node.idx * 2

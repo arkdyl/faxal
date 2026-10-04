@@ -6,3 +6,4 @@ native/bin
 *.fxc
 !native/tests/fxc/*.fxc
 .claude/
+*.vsix

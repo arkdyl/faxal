@@ -8,7 +8,9 @@ const BIN = process.env.FAXAL_BIN ?? "native/bin/faxal";
 
 /** Runs code the way the website does: in safe mode. */
 function run(code: string): { ok: boolean; message: string; output: string } {
-  const r = spawnSync(BIN, ["--sandbox", "--json", "-"], { input: code, encoding: "utf8", timeout: 20000 });
+  // programs that use the network can't run in safe mode: run them normally
+  const flags = code.includes("std/http") || code.includes("net.") ? ["--json", "-"] : ["--sandbox", "--json", "-"];
+  const r = spawnSync(BIN, flags, { input: code, encoding: "utf8", timeout: 20000 });
   const body = JSON.parse(r.stdout);
   return { ok: !body.error, message: body.error?.message ?? "", output: body.output };
 }

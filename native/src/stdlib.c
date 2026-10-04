@@ -375,6 +375,162 @@ NATIVE(os_stdin_read) {
 }
 NATIVE(os_flush) { UNUSED; fflush(stdout); *out = NIL_VAL; return true; }
 
+
+/* ------------------------------------------------------------------------ net
+ * Raw TCP for the standard library's std/http. Handles are small numbers. Not available in safe mode. */
+#define MAX_SOCKETS 256
+static fx_socket netSocks[MAX_SOCKETS];
+static bool netUsed[MAX_SOCKETS];
+
+static int netAdd(fx_socket s) {
+  for (int i = 0; i < MAX_SOCKETS; i++) if (!netUsed[i]) { netUsed[i] = true; netSocks[i] = s; return i; }
+  fx_net_close(s);
+  return -1;
+}
+
+static bool netGet(const char* fn, Value v, fx_socket* out) {
+  if (!IS_NUM(v) || AS_NUM(v) < 0 || AS_NUM(v) >= MAX_SOCKETS || AS_NUM(v) != floor(AS_NUM(v))) return throwError("%s() expects a connection from net.connect or net.accept, got %s", fn, typeName(v));
+  int i = (int)AS_NUM(v);
+  if (!netUsed[i]) return throwError("%s(): that connection is closed", fn);
+  *out = netSocks[i];
+  return true;
+}
+
+NATIVE(net_listen) {
+  fx_net_init();
+  INT("net.listen", 0, port);
+  const char* host = "127.0.0.1";
+  if (argc > 1) { ObjString* h; if (!argStr("net.listen", args[1], &h)) return false; host = h->chars; }
+  char portStr[16]; snprintf(portStr, sizeof portStr, "%d", port);
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_PASSIVE;
+  if (getaddrinfo(host, portStr, &hints, &res) != 0 || !res) return throwError("net.listen: can't use the address '%s'", host);
+  fx_socket s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+  if (s == FX_BAD_SOCKET) { freeaddrinfo(res); return throwError("net.listen: %s", fx_net_error()); }
+  int yes = 1;
+  setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof yes);
+  if (bind(s, res->ai_addr, (int)res->ai_addrlen) != 0 || listen(s, 128) != 0) {
+    const char* why = fx_net_error();
+    freeaddrinfo(res); fx_net_close(s);
+    return throwError("net.listen: can't listen on %s:%d (%s)", host, port, why);
+  }
+  freeaddrinfo(res);
+  int h = netAdd(s);
+  if (h < 0) return throwError("net.listen: too many open connections");
+  *out = NUM_VAL(h);
+  return true;
+}
+
+NATIVE(net_port) {
+  (void)argc; fx_socket s; if (!netGet("net.port", args[0], &s)) return false;
+  struct sockaddr_in a; socklen_t len = sizeof a;
+  if (getsockname(s, (struct sockaddr*)&a, &len) != 0) return throwError("net.port: %s", fx_net_error());
+  *out = NUM_VAL(ntohs(a.sin_port));
+  return true;
+}
+
+/* net.accept(listener, timeout): a new connection, or nil if none arrives within `timeout` seconds (0 = just look, omitted = wait) */
+NATIVE(net_accept) {
+  fx_socket s; if (!netGet("net.accept", args[0], &s)) return false;
+  if (argc > 1) {
+    NUM("net.accept", 1, t);
+    int w = fx_net_wait(s, false, t < 0 ? 0 : t);
+    if (w < 0) return throwError("net.accept: %s", fx_net_error());
+    if (w == 0) { *out = NIL_VAL; return true; }
+  }
+  fx_socket c = accept(s, NULL, NULL);
+  if (c == FX_BAD_SOCKET) { *out = NIL_VAL; return true; }
+  int h = netAdd(c);
+  if (h < 0) return throwError("net.accept: too many open connections");
+  *out = NUM_VAL(h);
+  return true;
+}
+
+NATIVE(net_connect) {
+  fx_net_init();
+  STR("net.connect", 0, host); INT("net.connect", 1, port);
+  double timeout = 10;
+  if (argc > 2) { if (!argNum("net.connect", args[2], &timeout)) return false; }
+  char portStr[16]; snprintf(portStr, sizeof portStr, "%d", port);
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
+  if (getaddrinfo(host->chars, portStr, &hints, &res) != 0 || !res) return throwError("net.connect: can't find the host '%s'", host->chars);
+  fx_socket s = FX_BAD_SOCKET;
+  const char* why = "no address worked";
+  for (struct addrinfo* a = res; a; a = a->ai_next) {
+    fx_socket t = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+    if (t == FX_BAD_SOCKET) continue;
+    fx_net_blocking(t, false);
+    int r = connect(t, a->ai_addr, (int)a->ai_addrlen);
+    bool ok = r == 0;
+    if (!ok && fx_net_would_block()) {
+      if (fx_net_wait(t, true, timeout) == 1) {
+        int err = 0; socklen_t el = sizeof err;
+        getsockopt(t, SOL_SOCKET, SO_ERROR, (char*)&err, &el);
+        ok = err == 0;
+        if (!ok) why = "the connection was refused";
+      } else why = "the connection timed out";
+    } else if (!ok) why = fx_net_error();
+    if (ok) { fx_net_blocking(t, true); s = t; break; }
+    fx_net_close(t);
+  }
+  freeaddrinfo(res);
+  if (s == FX_BAD_SOCKET) return throwError("net.connect: can't connect to %s:%d (%s)", host->chars, port, why);
+  int h = netAdd(s);
+  if (h < 0) return throwError("net.connect: too many open connections");
+  *out = NUM_VAL(h);
+  return true;
+}
+
+/* net.read(conn, max, timeout): up to `max` bytes as text; "" when the other side has closed; nil if nothing arrived within `timeout` seconds */
+NATIVE(net_read) {
+  fx_socket s; if (!netGet("net.read", args[0], &s)) return false;
+  int max = 65536;
+  if (argc > 1 && !argInt("net.read", args[1], &max)) return false;
+  if (max < 1 || max > 16 * 1024 * 1024) return throwError("net.read: max must be between 1 and 16777216");
+  if (argc > 2 && !IS_NIL(args[2])) {
+    NUM("net.read", 2, t);
+    if (t >= 0) {
+      int w = fx_net_wait(s, false, t);
+      if (w < 0) return throwError("net.read: %s", fx_net_error());
+      if (w == 0) { *out = NIL_VAL; return true; }
+    }
+  }
+  char* buf = malloc((size_t)max);
+  int n = (int)recv(s, buf, (size_t)max, 0);
+  if (n < 0) n = 0;        /* a reset connection reads as closed */
+  *out = strVal(buf, n);
+  free(buf);
+  return true;
+}
+
+NATIVE(net_write) {
+  (void)argc; fx_socket s; if (!netGet("net.write", args[0], &s)) return false;
+  ObjString* d = valueToString(args[1]);
+  if (!d) return false;
+  int sent = 0;
+  while (sent < d->length) {
+    int n = (int)send(s, d->chars + sent, (size_t)(d->length - sent), 0);
+    if (n <= 0) {
+      if (n < 0 && fx_net_would_block()) { fx_net_wait(s, true, 1.0); continue; }
+      return throwError("net.write: the connection was closed");
+    }
+    sent += n;
+  }
+  *out = NUM_VAL(sent);
+  return true;
+}
+
+NATIVE(net_close) {
+  (void)argc; (void)out;
+  if (!IS_NUM(args[0]) || AS_NUM(args[0]) < 0 || AS_NUM(args[0]) >= MAX_SOCKETS) return throwError("net.close() expects a connection");
+  int i = (int)AS_NUM(args[0]);
+  if (netUsed[i]) { fx_net_close(netSocks[i]); netUsed[i] = false; }
+  return true;
+}
+
 NATIVE(os_cwd) { UNUSED; char buf[PATH_MAX]; if (!fx_getcwd(buf, sizeof buf)) return throwError("os.cwd() failed"); *out = strVal(buf, (int)strlen(buf)); return true; }
 
 NATIVE(fs_read) {
@@ -976,6 +1132,27 @@ NATIVE(s_is_alpha) {
   bool ok = s->length > 0; for (int i = 0; i < s->length; i++) if (!isalpha((unsigned char)s->chars[i])) ok = false;
   *out = BOOL_VAL(ok); return true;
 }
+/* s.bytes(): the bytes of the text as a list of numbers 0..255; from_bytes(list) is the opposite */
+NATIVE(s_bytes) {
+  (void)argc; ObjString* s = AS_STRING(args[0]);
+  ObjList* l = newList();
+  push(OBJ_VAL(l));
+  for (int i = 0; i < s->length; i++) listPush(l, NUM_VAL((unsigned char)s->chars[i]));
+  pop();
+  *out = OBJ_VAL(l); return true;
+}
+NATIVE(g_from_bytes) {
+  (void)argc;
+  if (!IS_LIST(args[0])) return throwError("from_bytes() expects a list of numbers, got %s", typeName(args[0]));
+  ObjList* l = AS_LIST(args[0]);
+  char* b = malloc((size_t)l->count + 1);
+  for (int i = 0; i < l->count; i++) {
+    Value v = l->items[i];
+    if (!IS_NUM(v) || AS_NUM(v) < 0 || AS_NUM(v) > 255 || AS_NUM(v) != floor(AS_NUM(v))) { free(b); return throwError("from_bytes() needs whole numbers from 0 to 255"); }
+    b[i] = (char)(int)AS_NUM(v);
+  }
+  *out = strVal(b, l->count); free(b); return true;
+}
 NATIVE(s_is_empty) { (void)argc; *out = BOOL_VAL(AS_STRING(args[0])->length == 0); return true; }
 NATIVE(s_size) { (void)argc; ObjString* s = AS_STRING(args[0]); *out = NUM_VAL(cpCount(s->chars, s->length)); return true; }
 
@@ -986,7 +1163,7 @@ const MethodDef stringMethods[] = {
   {"split", s_split, 0, 1}, {"chars", s_chars, 0, 0}, {"lines", s_lines, 0, 0},
   {"repeat", s_repeat, 1, 1}, {"reverse", s_reverse, 0, 0}, {"pad_left", s_pad_left, 1, 2}, {"pad_right", s_pad_right, 1, 2},
   {"center", s_center, 1, 2}, {"lstrip", s_lstrip, 0, 0}, {"rstrip", s_rstrip, 0, 0}, {"capitalize", s_capitalize, 0, 0},
-  {"is_digit", s_is_digit, 0, 0}, {"is_alpha", s_is_alpha, 0, 0}, {"is_empty", s_is_empty, 0, 0}, {"size", s_size, 0, 0}, {NULL, NULL, 0, 0}
+  {"is_digit", s_is_digit, 0, 0}, {"is_alpha", s_is_alpha, 0, 0}, {"is_empty", s_is_empty, 0, 0}, {"size", s_size, 0, 0}, {"bytes", s_bytes, 0, 0}, {NULL, NULL, 0, 0}
 };
 
 /* -------------------------------------------------------------- list methods */
@@ -1424,6 +1601,7 @@ void registerBuiltins(void) {
   defineNative(g, "ord", n_ord, 1, 1);
   defineNative(g, "chr", n_chr, 1, 1);
   defineNative(g, "bool", g_bool, 1, 1);
+  defineNative(g, "from_bytes", g_from_bytes, 1, 1);
   defineNative(g, "sum", l_sum, 1, 1);
   defineNative(g, "any", l_any, 1, 2);
   defineNative(g, "all", l_all, 1, 2);
@@ -1498,6 +1676,15 @@ void registerBuiltins(void) {
   defineNative(&os->map, "flush", os_flush, 0, 0);
   defineNative(&os->map, "run", os_run, 1, 1);
   defineNative(&os->map, "exit", n_exit, 0, 1);
+
+  ObjMap* netns = namespaceMap("net");
+  defineNative(&netns->map, "listen", net_listen, 1, 2);
+  defineNative(&netns->map, "port", net_port, 1, 1);
+  defineNative(&netns->map, "accept", net_accept, 1, 2);
+  defineNative(&netns->map, "connect", net_connect, 2, 3);
+  defineNative(&netns->map, "read", net_read, 1, 3);
+  defineNative(&netns->map, "write", net_write, 2, 2);
+  defineNative(&netns->map, "close", net_close, 1, 1);
 
   ObjMap* fs = namespaceMap("fs");
   defineNative(&fs->map, "read", fs_read, 1, 1);
